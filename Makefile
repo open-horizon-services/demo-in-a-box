@@ -31,7 +31,8 @@ init: up-hub up
 
 up-hub: 
 	@VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant up | tee summary.txt
-	@tail -n 2 summary.txt | cut -c 16- > mycreds.env
+	@grep 'export HZN_ORG_ID=' summary.txt | cut -c16- | tail -n1 > mycreds.env
+	@grep 'export HZN_EXCHANGE_USER_AUTH=' summary.txt | cut -c16- | tail -n1 >>mycreds.env
 	@if [ -f summary.txt ]; then rm summary.txt; fi
 
 up: 
