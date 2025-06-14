@@ -49,15 +49,15 @@ check:
 	@echo "ENVIRONMENT VARIABLES     VALUES"
 	@echo "=====================     ============================================="
 	@echo "SYSTEM_CONFIGURATION      ${SYSTEM_CONFIGURATION}"
-	@echo "NUM_AGENTS               ${NUM_AGENTS}"
-	@echo "BASE_IP                 ${BASE_IP}"
-	@echo "MEMORY                  ${MEMORY}"
-	@echo "DISK_SIZE               ${DISK_SIZE}"
-	@echo "VAGRANT_HUB             ${VAGRANT_HUB}"
-	@echo "VAGRANT_TEMPLATE        ${VAGRANT_TEMPLATE}"
-	@echo "VAGRANT_VAGRANTFILE     ${VAGRANT_VAGRANTFILE}"
-	@echo "HZN_ORG_ID              ${HZN_ORG_ID}"
-	@echo "OS                      ${OS}"
+	@echo "NUM_AGENTS                ${NUM_AGENTS}"
+	@echo "BASE_IP                   ${BASE_IP}"
+	@echo "MEMORY                    ${MEMORY}"
+	@echo "DISK_SIZE                 ${DISK_SIZE}"
+	@echo "VAGRANT_HUB               ${VAGRANT_HUB}"
+	@echo "VAGRANT_TEMPLATE          ${VAGRANT_TEMPLATE}"
+	@echo "VAGRANT_VAGRANTFILE       ${VAGRANT_VAGRANTFILE}"
+	@echo "HZN_ORG_ID                ${HZN_ORG_ID}"
+	@echo "OS                        ${OS}"
 	@echo "=====================     ============================================="
 	@echo ""
 
@@ -71,7 +71,7 @@ up-hub:
 
 up: 
 	$(eval include ./mycreds.env)
-	@erb num_agents=$(NUM_AGENTS) base_ip=$(BASE_IP) memory=$(MEMORY) disk_size=$(DISK_SIZE) $(VAGRANT_TEMPLATE) > $(VAGRANT_VAGRANTFILE)
+	@erb hzn_org_id=${HZN_ORG_ID} hzn_exchange_user_auth=${HZN_EXCHANGE_USER_AUTH} num_agents=$(NUM_AGENTS) base_ip=$(BASE_IP) memory=$(MEMORY) disk_size=$(DISK_SIZE) $(VAGRANT_TEMPLATE) > $(VAGRANT_VAGRANTFILE)
 	@VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant up --parallel
 
 connect-hub:
@@ -92,6 +92,7 @@ clean:
 	@if [ -f $(VAGRANT_VAGRANTFILE) ]; then rm $(VAGRANT_VAGRANTFILE); fi
 	@if [ -f summary.txt ]; then rm summary.txt; fi
 	@if [ -f mycreds.env ]; then rm mycreds.env; fi
+	@vagrant global-status --prune
 
 destroy:
 	@VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant destroy -f

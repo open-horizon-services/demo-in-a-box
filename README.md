@@ -108,7 +108,7 @@ The system uses a single ERB template (`configuration/Vagrantfile.template.erb`)
 
 ### IP Addressing Scheme
 
-Agent VMs are assigned IP addresses following the pattern: `192.168.56.<base_ip + (agent_number + 1) * 10>`. For example:
+Agent VMs are assigned IP addresses following the pattern: `192.168.56.<base_ip + (agent_number - 1) * 10>`. For example:
 - Agent 1: 192.168.56.20
 - Agent 2: 192.168.56.30
 - Agent 3: 192.168.56.40
