@@ -1,0 +1,27 @@
+Vagrant.configure("2") do |config|
+  <% (1..num_agents).each do |i| %>
+    config.vm.define "agent<%= i %>" do |agent<%= i %>|
+      agent<%= i %>.vm.box = "ubuntu/jammy64"
+      agent<%= i %>.vm.disk :disk, size: "<%= disk_size %>GB", primary: true
+      agent<%= i %>.vm.network :private_network, ip: "192.168.56.<%= base_ip + (i+1)*10 %>"
+      agent<%= i %>.vm.provider "virtualbox" do |vb|
+        vb.memory = "<%= memory %>"
+      end
+      agent<%= i %>.vm.hostname = "agent<%= i %>"
+      agent<%= i %>.vm.provision "shell", inline: <<-SHELL
+      apt-get -y update
+      apt-get -y upgrade
+      apt-get install -y gcc make git curl jq net-tools docker.io docker-compose
+      touch agent-install.crt
+      echo "HZN_ORG_ID=${HZN_ORG_ID}" > agent-install.cfg
+      echo "HZN_EXCHANGE_USER_AUTH=${HZN_EXCHANGE_USER_AUTH}" >> agent-install.cfg
+      echo "HZN_EXCHANGE_URL=http://192.168.56.10:3090/v1" >> agent-install.cfg
+      echo "HZN_FSS_CSSURL=http://192.168.56.10:9443/" >> agent-install.cfg
+      echo "HZN_AGBOT_URL=http://192.168.56.10:3111" >> agent-install.cfg
+      echo "HZN_FDO_SVC_URL=http://192.168.56.10:9008/api" >> agent-install.cfg
+      export $(cat agent-install.cfg)
+      curl -sSL https://raw.githubusercontent.com/open-horizon/anax/refs/heads/master/agent-install/agent-install.sh | bash -s -- -i anax: -k ./agent-install.cfg -c css: -p IBM/pattern-ibm.helloworld -w '*' -T 120
+      SHELL
+    end
+  <% end %>
+end 

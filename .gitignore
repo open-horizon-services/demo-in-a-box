@@ -12,3 +12,5 @@ Vagrantfile.unicycle
 Vagrantfile.car
 Vagrantfile.bicycle
 Vagrantfile.semi
+.cursor
+.cursor/**
