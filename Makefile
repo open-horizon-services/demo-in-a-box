@@ -5,9 +5,39 @@ VMNAME :=
 
 # Which system configuration to be provisioned
 export SYSTEM_CONFIGURATION ?= unicycle
+
+# Configuration parameters for the ERB template
+export NUM_AGENTS ?= 1
+export BASE_IP ?= 20
+export MEMORY ?= 2048
+export DISK_SIZE ?= 20
+
+# Map system configurations to parameters
+ifeq ($(SYSTEM_CONFIGURATION),unicycle)
+    NUM_AGENTS := 1
+    BASE_IP := 20
+    MEMORY := 2048
+    DISK_SIZE := 20
+else ifeq ($(SYSTEM_CONFIGURATION),bicycle)
+    NUM_AGENTS := 3
+    BASE_IP := 20
+    MEMORY := 2048
+    DISK_SIZE := 20
+else ifeq ($(SYSTEM_CONFIGURATION),car)
+    NUM_AGENTS := 5
+    BASE_IP := 20
+    MEMORY := 2048
+    DISK_SIZE := 20
+else ifeq ($(SYSTEM_CONFIGURATION),semi)
+    NUM_AGENTS := 7
+    BASE_IP := 20
+    MEMORY := 2048
+    DISK_SIZE := 20
+endif
+
 export VAGRANT_HUB := "./configuration/Vagrantfile.hub"
 export VAGRANT_VAGRANTFILE := "./configuration/Vagrantfile.${SYSTEM_CONFIGURATION}"
-export VAGRANT_TEMPLATE := "./configuration/Vagrantfile.${SYSTEM_CONFIGURATION}.template"
+export VAGRANT_TEMPLATE := "./configuration/Vagrantfile.template.erb"
 
 # Detect Operating System running Make
 OS := $(shell uname -s)
@@ -19,6 +49,10 @@ check:
 	@echo "ENVIRONMENT VARIABLES     VALUES"
 	@echo "=====================     ============================================="
 	@echo "SYSTEM_CONFIGURATION      ${SYSTEM_CONFIGURATION}"
+	@echo "NUM_AGENTS                ${NUM_AGENTS}"
+	@echo "BASE_IP                   ${BASE_IP}"
+	@echo "MEMORY                    ${MEMORY}"
+	@echo "DISK_SIZE                 ${DISK_SIZE}"
 	@echo "VAGRANT_HUB               ${VAGRANT_HUB}"
 	@echo "VAGRANT_TEMPLATE          ${VAGRANT_TEMPLATE}"
 	@echo "VAGRANT_VAGRANTFILE       ${VAGRANT_VAGRANTFILE}"
@@ -37,9 +71,8 @@ up-hub:
 
 up: 
 	$(eval include ./mycreds.env)
-	@envsubst < $(VAGRANT_TEMPLATE) > $(VAGRANT_VAGRANTFILE)
-	@VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant up
-#	@if [ -f mycreds.env ]; then rm mycreds.env; fi
+	@erb hzn_org_id=${HZN_ORG_ID} hzn_exchange_user_auth=${HZN_EXCHANGE_USER_AUTH} num_agents=$(NUM_AGENTS) base_ip=$(BASE_IP) memory=$(MEMORY) disk_size=$(DISK_SIZE) $(VAGRANT_TEMPLATE) > $(VAGRANT_VAGRANTFILE)
+	@VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant up --parallel
 
 connect-hub:
 	@VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant ssh
@@ -59,6 +92,7 @@ clean:
 	@if [ -f $(VAGRANT_VAGRANTFILE) ]; then rm $(VAGRANT_VAGRANTFILE); fi
 	@if [ -f summary.txt ]; then rm summary.txt; fi
 	@if [ -f mycreds.env ]; then rm mycreds.env; fi
+	@vagrant global-status --prune
 
 destroy:
 	@VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant destroy -f
