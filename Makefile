@@ -78,10 +78,20 @@ connect-hub:
 	@VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant ssh
 
 connect:
-	@VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant ssh $(VMNAME)
+	@if [ -f $(VAGRANT_VAGRANTFILE) ]; then \
+		VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant ssh $(VMNAME); \
+	else \
+		echo "Error: Vagrantfile not found at $(VAGRANT_VAGRANTFILE). Run 'make up' first to generate it."; \
+		exit 1; \
+	fi
 
 status:
-	@VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant status
+	@if [ -f $(VAGRANT_VAGRANTFILE) ]; then \
+		VAGRANT_VAGRANTFILE=$(VAGRANT_VAGRANTFILE) vagrant status; \
+	else \
+		echo "Error: Vagrantfile not found at $(VAGRANT_VAGRANTFILE). Run 'make up' first to generate it."; \
+		exit 1; \
+	fi
 
 status-hub:
 	@VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant status
