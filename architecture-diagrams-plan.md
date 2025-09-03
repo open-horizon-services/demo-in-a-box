@@ -1,25 +1,27 @@
-# demo-in-a-box
+# Architecture Diagrams Plan for demo-in-a-box
 
-This is a set of materials designed to allow anyone to create a portable set of computers that will demonstrate most aspects of Open Horizon and OH-delivered applications in a single location. It should contain a Bill of Materials, initial configuration, setup instructions, and examples of how to demonstrate most features.
+## Overview
 
-## Pre-requisites
+This document outlines the plan for creating visual diagrams to enhance the README.md file. These diagrams will illustrate the different system configurations (unicycle, bicycle, car, and semi) and clearly show the relationships between VMs, network connections, and Open Horizon components.
 
-You must have the following utilities installed in order to provision:
+## Diagram Requirements
 
-* `make`
-* `vagrant`
-* `virtualbox`
-* `erb` (Ruby's ERB template processor)
+Each diagram should include:
 
-Additionally, this must be run on an `x86_64` architecture machine running a Debian-based OS such as Ubuntu.
+1. Visual representation of all VMs in the configuration
+2. Clear labeling of the hub VM (with Exchange) and agent VMs
+3. IP addresses for each VM
+4. Memory allocation for each VM
+5. Network connections between VMs
+6. Open Horizon components running on each VM
 
-## System Configurations
+## Implementation Approach
 
-The `x86_64` architecture host can be configured one of four ways:
+We will use Mermaid diagrams embedded directly in the README.md file. Mermaid is supported by GitHub and will render as visual diagrams when viewed on GitHub.
 
-### Unicycle Configuration
+## Diagram Drafts
 
-Two VMs, with the primary running the Exchange and an Agent using 1/2 of the available resources, and the remaining VM running an Agent also using 1/2 of the available resources.
+### 1. Unicycle Configuration (2 VMs)
 
 ```mermaid
 graph TD
@@ -58,9 +60,7 @@ graph TD
     IP2["Agent VM IP: 192.168.56.20"] --> Agent1
 ```
 
-### Bicycle Configuration
-
-Three VMs, with the primary running the Exchange and an Agent using 1/2 of the available resources, and the remaining two running Agents each using 1/4 of the available resources.
+### 2. Bicycle Configuration (3 VMs)
 
 ```mermaid
 graph TD
@@ -106,9 +106,7 @@ graph TD
     IP3["Agent VM 2 IP: 192.168.56.30"] --> Agent2
 ```
 
-### Car Configuration
-
-Five VMs (recommended for the 16GB RAM configuration only), with the primary running the Exchange and an Agent using 1/2 of the available resources, and the remaining four running Agents each using 1/8 of the available resources.
+### 3. Car Configuration (5 VMs)
 
 ```mermaid
 graph TD
@@ -168,9 +166,83 @@ graph TD
     IP5["Agent VM 4 IP: 192.168.56.50"] --> Agent4
 ```
 
-### Semi Configuration
+### 4. Semi Configuration (7 VMs)
 
-Seven VMs (recommended for the 16GB RAM configuration only), with the primary running the Exchange and an Agent using 1/4 of the available resources, and the remaining six running Agents each using 1/8 of the available resources.
+```mermaid
+graph TD
+    subgraph "Semi Configuration"
+    
+    subgraph "Hub VM (4GB RAM)"
+    Exchange["Exchange Service"]
+    CSS["Sync Service (CSS)"]
+    AgBot["Agreement Bot"]
+    FDO["FDO Service"]
+    MongoDB["MongoDB"]
+    HubAgent["Agent"]
+    end
+    
+    subgraph "Agent VM 1 (2GB RAM)"
+    Agent1["Agent"]
+    HelloWorld1["Hello World Workload"]
+    end
+    
+    subgraph "Agent VM 2 (2GB RAM)"
+    Agent2["Agent"]
+    HelloWorld2["Hello World Workload"]
+    end
+    
+    subgraph "Agent VM 3 (2GB RAM)"
+    Agent3["Agent"]
+    HelloWorld3["Hello World Workload"]
+    end
+    
+    subgraph "Agent VM 4 (2GB RAM)"
+    Agent4["Agent"]
+    HelloWorld4["Hello World Workload"]
+    end
+    
+    subgraph "Agent VM 5 (2GB RAM)"
+    Agent5["Agent"]
+    HelloWorld5["Hello World Workload"]
+    end
+    
+    subgraph "Agent VM 6 (2GB RAM)"
+    Agent6["Agent"]
+    HelloWorld6["Hello World Workload"]
+    end
+    
+    Exchange --> CSS
+    Exchange --> AgBot
+    Exchange --> FDO
+    Exchange --> MongoDB
+    
+    Agent1 --> Exchange
+    Agent2 --> Exchange
+    Agent3 --> Exchange
+    Agent4 --> Exchange
+    Agent5 --> Exchange
+    Agent6 --> Exchange
+    HubAgent --> Exchange
+    
+    classDef hub fill:#f9f,stroke:#333,stroke-width:2px
+    classDef agent fill:#bbf,stroke:#333,stroke-width:1px
+    class Exchange,CSS,AgBot,FDO,MongoDB,HubAgent hub
+    class Agent1,HelloWorld1,Agent2,HelloWorld2,Agent3,HelloWorld3,Agent4,HelloWorld4,Agent5,HelloWorld5,Agent6,HelloWorld6 agent
+    
+    end
+    
+    IP1["Hub VM IP: 192.168.56.10"] --> Exchange
+    IP2["Agent VM 1 IP: 192.168.56.20"] --> Agent1
+    IP3["Agent VM 2 IP: 192.168.56.30"] --> Agent2
+    IP4["Agent VM 3 IP: 192.168.56.40"] --> Agent3
+    IP5["Agent VM 4 IP: 192.168.56.50"] --> Agent4
+    IP6["Agent VM 5 IP: 192.168.56.60"] --> Agent5
+    IP7["Agent VM 6 IP: 192.168.56.70"] --> Agent6
+```
+
+## Alternative Diagram Style
+
+If the above style becomes too complex for larger configurations, we could use a simpler style:
 
 ```mermaid
 graph LR
@@ -200,9 +272,9 @@ graph LR
     end
 ```
 
-### Network Configuration
+## Network Diagram
 
-The following diagram shows how the VMs are connected in the network:
+We should also include a network diagram showing how the VMs are connected:
 
 ```mermaid
 graph TD
@@ -248,101 +320,18 @@ graph TD
     end
 ```
 
-### Legend
+## Implementation Steps
 
-- **Pink/Purple Nodes**: Hub VM components (Exchange, CSS, AgBot, FDO, MongoDB)
-- **Blue Nodes**: Agent VM components
-- **Green Node**: Host machine
+1. Create a new branch for the documentation updates
+2. Add the diagrams to the README.md file in the appropriate sections
+3. Update the System Configurations section to include the diagrams
+4. Add a legend explaining the symbols and colors used in the diagrams
+5. Submit a pull request for review
 
-## Installation
+## Next Steps
 
-Clone the repository, then `cd` into the repo folder.
+After implementing these diagrams, we should:
 
-Run `make check` to verify dependencies are installed and defaults are correct.
-Further, run `make status` to confirm that Vagrant is installed and running properly.
-
-Running `make init` will provision the default system configuration ("unicycle"). To use any other configuration, first `export SYSTEM_CONFIGURATION=<system configuration string>` where `<system configuration string>` is one of "unicycle", "bicycle", "car", or "semi" _without the quotes_. Installation should take between 30 minutes for _unicycle_ to an hour for _semi_.
-
-### Advanced Configuration
-
-The system can be further customized by setting the following environment variables:
-
-* `NUM_AGENTS` - Number of agent VMs to create (default: 1)
-* `BASE_IP` - Starting IP address final value for agent VMs (default: 20)
-* `MEMORY` - Memory allocation per agent VM in MB (default: 2048)
-* `DISK_SIZE` - Disk size per agent VM in GB (default: 20)
-
-Example:
-```shell
-export SYSTEM_CONFIGURATION=custom
-export NUM_AGENTS=4
-export BASE_IP=30
-export MEMORY=4096
-export DISK_SIZE=40
-make init
-```
-
-If you only want the hub running in a VM with an agent, and not a separate agent in a VM, just run `make up-hub` instead of `make init`, but make sure you copy over the credentials from the "mycreds.env" file on the host.
-
-Running `make down` will de-provision the system and cannot be undone. Make sure you really want to do this.
-
-## Usage
-
-Run `make connect` to SSH to the first agent VM in _unicycle_ configuration. For all other configurations, specify the "VMNAME" as an argument: `make connect VMNAME=agent3`. The credentials can be set by running `export $(cat agent-install.cfg)`. To test that the installation is configured and working, run the following commands:
-
-```shell
-hzn version
-```
-
-This should return matching version numbers for both the CLI and the agent.
-
-```shell
-hzn node list
-```
-
-This will show the agent is running and the HelloWorld sample workload is configured and running.
-
-```shell
-hzn ex user ls
-```
-
-This will confirm that the CLI can connect to the exchange in the hub's VM, and that the credentials are valid.
-
-```shell
-hzn ex node ls
-```
-
-This will show all of the agents registered with the exchange in the hub VM.
-
-```shell
-exit
-```
-
-Will disconnect from the agent VM and end the SSH session.
-
-```shell
-make down
-```
-
-Will remove all of the VMs and delete temporary files.
-
-## Advanced details
-
-The system uses a single ERB template (`configuration/Vagrantfile.template.erb`) to generate the Vagrant configuration for all agent VMs. The template supports dynamic configuration through environment variables and maintains consistent IP addressing and resource allocation across all VMs.
-
-### IP Addressing Scheme
-
-Agent VMs are assigned IP addresses following the pattern: `192.168.56.<base_ip + (agent_number - 1) * 10>`. For example:
-- Agent 1: 192.168.56.20
-- Agent 2: 192.168.56.30
-- Agent 3: 192.168.56.40
-And so on...
-
-### Resource Allocation
-
-Each agent VM is configured with:
-- Memory: 2048MB (2GB) by default
-- Disk: 20GB by default
-- CPU: 1 core (default VirtualBox setting)
-
-These values can be customized using the environment variables described in the Advanced Configuration section.
+1. Get feedback from users on the clarity and usefulness of the diagrams
+2. Consider adding additional diagrams for specific workflows or use cases
+3. Update the diagrams as needed based on feedback and changes to the project
