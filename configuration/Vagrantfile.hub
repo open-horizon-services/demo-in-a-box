@@ -13,7 +13,7 @@ Vagrant.configure("2") do |config|
   config.vm.provision "shell", inline: <<-SHELL
     apt-get -y update
     apt-get -y upgrade
-    apt-get install -y gcc make git curl jq net-tools docker.io
+    apt-get install -y gcc make git curl jq net-tools docker.io docker-compose-v2
     ufw allow 3090/tcp
     ufw allow 3111/tcp
     ufw allow 9008/tcp

@@ -11,7 +11,7 @@ Vagrant.configure("2") do |config|
       agent<%= i %>.vm.provision "shell", inline: <<-SHELL
       apt-get -y update
       apt-get -y upgrade
-      apt-get install -y gcc make git curl jq net-tools docker.io docker-compose
+      apt-get install -y gcc make git curl jq net-tools docker.io docker-compose-v2
       touch agent-install.crt
       export HZN_ORG_ID=<%= hzn_org_id %>
       export HZN_EXCHANGE_USER_AUTH=<%= hzn_exchange_user_auth %>
