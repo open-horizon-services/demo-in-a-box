@@ -108,7 +108,7 @@ graph TD
 
 ### Car Configuration
 
-Five VMs (recommended for the 16GB RAM configuration only), with the primary running the Exchange and an Agent using 1/2 of the available resources, and the remaining four running Agents each using 1/8 of the available resources.
+Five VMs (recommended for the 16GB RAM configuration only), with the primary running the Exchange and an Agent using 1/4 of the available resources, and the remaining four running Agents each using 1/8 of the available resources.
 
 ```mermaid
 graph TD
