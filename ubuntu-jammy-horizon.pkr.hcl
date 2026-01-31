@@ -27,7 +27,7 @@ source "vagrant" "ubuntu-jammy" {
   
   output_dir = "packer_output"
   teardown_method = "destroy"
-  add_force = false
+  skip_add = true
 }
 
 build {
@@ -78,14 +78,13 @@ build {
     ]
   }
   
-  post-processor "vagrant" {
-    output               = "ubuntu-jammy-horizon-{{.Provider}}-${var.box_version}.box"
-    compression_level    = 9
-    keep_input_artifact  = false
-  }
-  
   post-processor "shell-local" {
     inline = [
+      "set -e",
+      "echo '==> Copying and renaming box file'",
+      "cp packer_output/package.box ubuntu-jammy-horizon-virtualbox-${var.box_version}.box",
+      "",
+      "echo '==> Creating metadata file'",
       "echo '{",
       "  \"name\": \"demo-in-a-box/ubuntu-jammy-horizon\",",
       "  \"description\": \"Ubuntu 22.04 LTS with Open Horizon dependencies pre-installed\",",
