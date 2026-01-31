@@ -22,13 +22,21 @@ Vagrant.configure("2") do |config|
     ufw allow 9008/tcp
     ufw allow 9443/tcp
     export HZN_LISTEN_IP="${HUB_IP}"
-    export CSS_IMAGE_TAG=1.10.1-1577
+    export CSS_IMAGE_TAG=latest
     export MONGO_IMAGE_TAG=4.0.6
-    export EXCHANGE_IMAGE_NAME=quay.io/open-horizon/exchange-alpine
-    curl -sSL https://raw.githubusercontent.com/open-horizon/devops/master/mgmt-hub/deploy-mgmt-hub.sh | bash -s --
+    export EXCHANGE_IMAGE_NAME=quay.io/open-horizon/exchange-ubi
+    export EXCHANGE_IMAGE_TAG=testing
+    
+    # Capture script output and extract credentials
+    curl -sSL https://raw.githubusercontent.com/open-horizon/devops/master/mgmt-hub/deploy-mgmt-hub.sh | bash -s -- 2>&1 | tee /tmp/deploy-output.txt
+    
+    # Parse credentials from output
+    export HZN_ORG_ID=$(grep "export HZN_ORG_ID=" /tmp/deploy-output.txt | tail -1 | cut -d'=' -f2)
+    export HZN_EXCHANGE_USER_AUTH=$(grep "export HZN_EXCHANGE_USER_AUTH=" /tmp/deploy-output.txt | tail -1 | cut -d'=' -f2)
     
     if [ -z "$HZN_ORG_ID" ] || [ -z "$HZN_EXCHANGE_USER_AUTH" ]; then
-      echo "ERROR: Failed to obtain credentials from deploy-mgmt-hub.sh"
+      echo "ERROR: Failed to extract credentials from deploy-mgmt-hub.sh output"
+      echo "Output was saved to /tmp/deploy-output.txt"
       exit 1
     fi
     
@@ -54,26 +62,36 @@ EOF
     done
     
     echo "Waiting for CSS to be ready..."
-    for i in {1..30}; do
-      if curl -sf http://${HUB_IP}:9443/api/v1/health >/dev/null 2>&1; then
+    for i in {1..60}; do
+      # Check if CSS container is running and healthy (Docker health check)
+      if docker ps --filter "name=css-api" --filter "health=healthy" | grep -q css-api; then
         echo "✓ CSS is ready"
         break
       fi
-      if [ $i -eq 30 ]; then
-        echo "ERROR: CSS failed to start after 5 minutes"
+      if [ $i -eq 60 ]; then
+        echo "ERROR: CSS failed to become healthy after 10 minutes"
+        echo "CSS container status:"
+        docker ps -a --filter "name=css-api" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        echo "CSS logs:"
+        docker logs css-api 2>&1 | tail -30
         exit 1
       fi
       sleep 10
     done
     
     echo "Waiting for AgBot to be ready..."
-    for i in {1..30}; do
-      if curl -sf http://${HUB_IP}:3111/status >/dev/null 2>&1; then
+    for i in {1..60}; do
+      # Check if AgBot container is running and healthy
+      if docker ps --filter "name=agbot" --filter "health=healthy" | grep -q agbot; then
         echo "✓ AgBot is ready"
         break
       fi
-      if [ $i -eq 30 ]; then
-        echo "ERROR: AgBot failed to start after 5 minutes"
+      if [ $i -eq 60 ]; then
+        echo "ERROR: AgBot failed to become healthy after 10 minutes"
+        echo "AgBot container status:"
+        docker ps -a --filter "name=agbot" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        echo "AgBot logs:"
+        docker logs agbot 2>&1 | tail -30
         exit 1
       fi
       sleep 10

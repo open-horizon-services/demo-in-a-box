@@ -61,6 +61,8 @@ check:
 	@echo "DISK_SIZE                 ${DISK_SIZE}"
 	@echo "NETWORK_PREFIX            ${NETWORK_PREFIX}"
 	@echo "HUB_IP                    ${HUB_IP}"
+	@echo "BOX_NAME                  ${BOX_NAME}"
+	@echo "BOX_VERSION               ${BOX_VERSION}"
 	@echo "VAGRANT_HUB               ${VAGRANT_HUB}"
 	@echo "VAGRANT_TEMPLATE          ${VAGRANT_TEMPLATE}"
 	@echo "VAGRANT_VAGRANTFILE       ${VAGRANT_VAGRANTFILE}"

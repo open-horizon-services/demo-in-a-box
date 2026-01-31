@@ -377,6 +377,12 @@ hzn node list
 This will show the agent is running and the HelloWorld sample workload is configured and running.
 
 ```shell
+hzn agreement list
+```
+
+This will show active agreements between the agent and the AgBot, confirming workload deployment.
+
+```shell
 hzn ex user ls
 ```
 
