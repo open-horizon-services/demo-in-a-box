@@ -18,6 +18,12 @@ export HUB_IP ?= $(NETWORK_PREFIX).10
 # Configurable project default OS (change this to set new default OS)
 DEFAULT_OS_TYPE ?= ubuntu-22
 
+# Blessed samples configuration (optional)
+# Set BLESSED_SAMPLES_FILE to use custom samples during hub provisioning
+# Set OH_EXAMPLES_REPO to the raw URL of the examples repository
+export BLESSED_SAMPLES_FILE ?= blessedSamples.txt
+export OH_EXAMPLES_REPO ?=
+
 # Per-VM OS selection (enables mixed environments)
 export HUB_OS_TYPE ?= $(DEFAULT_OS_TYPE)
 export AGENT_OS_TYPE ?= $(DEFAULT_OS_TYPE)
@@ -102,6 +108,8 @@ check:
 	@echo "VAGRANT_TEMPLATE          ${VAGRANT_TEMPLATE}"
 	@echo "VAGRANT_VAGRANTFILE       ${VAGRANT_VAGRANTFILE}"
 	@echo "HZN_ORG_ID                ${HZN_ORG_ID}"
+	@echo "BLESSED_SAMPLES_FILE      ${BLESSED_SAMPLES_FILE}"
+	@echo "OH_EXAMPLES_REPO          ${OH_EXAMPLES_REPO}"
 	@echo "OS                        ${OS}"
 	@echo "=====================     ============================================="
 	@echo ""

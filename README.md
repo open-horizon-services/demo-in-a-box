@@ -421,6 +421,10 @@ make init
 
 If you only want the hub running in a VM with an agent, and not a separate agent in a VM, just run `make up-hub` instead of `make init`, but make sure you copy over the credentials from the "mycreds.env" file on the host.
 
+### Custom Blessed Samples
+
+By default, the hub is provisioned with standard Open Horizon example services. You can customize which services are published by using a custom `blessedSamples.txt` file. See [BLESSED_SAMPLES.md](BLESSED_SAMPLES.md) for detailed instructions.
+
 Running `make down` will de-provision the system and cannot be undone. Make sure you really want to do this.
 
 ## Agent Configuration Files

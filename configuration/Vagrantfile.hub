@@ -1,6 +1,10 @@
 Vagrant.configure("2") do |config|
   hub_ip = ENV.fetch('HUB_IP', '192.168.56.10')
   
+  # Blessed samples configuration (optional)
+  blessed_samples_file = ENV.fetch('BLESSED_SAMPLES_FILE', '')
+  oh_examples_repo = ENV.fetch('OH_EXAMPLES_REPO', '')
+  
   # Use hub-specific box (allows mixed OS)
   config.vm.box = ENV.fetch('HUB_BOX_NAME', 'demo-in-a-box/ubuntu-jammy-horizon')
   # Only set box_version for date-like versions (for base box pinning)
@@ -20,8 +24,11 @@ Vagrant.configure("2") do |config|
     vb.memory = "4096"
     vb.linked_clone = true
   end
+  config.vm.provision "file", source: "./#{blessed_samples_file}", destination: "/tmp/#{blessed_samples_file}" if File.exist?(blessed_samples_file)
   config.vm.provision "shell", inline: <<-SHELL
     HUB_IP="#{hub_ip}"
+    BLESSED_SAMPLES_FILE="#{blessed_samples_file}"
+    OH_EXAMPLES_REPO="#{oh_examples_repo}"
     
     # Detect OS type
     . /etc/os-release
@@ -188,5 +195,51 @@ EOF
     done
     
     echo "All hub services are running and healthy"
+    
+    # Handle blessed samples (BYO - Bring Your Own)
+    # If BLESSED_SAMPLES_FILE is set and the file exists in /tmp, publish custom samples
+    if [ -n "$BLESSED_SAMPLES_FILE" ] && [ -f "/tmp/$BLESSED_SAMPLES_FILE" ]; then
+      echo "==> Processing blessed samples from $BLESSED_SAMPLES_FILE..."
+      
+      if [ -z "$OH_EXAMPLES_REPO" ]; then
+        echo "WARNING: BLESSED_SAMPLES_FILE is set but OH_EXAMPLES_REPO is not defined."
+        echo "         Skipping custom samples publishing."
+      else
+        echo "==> OH_EXAMPLES_REPO: $OH_EXAMPLES_REPO"
+        echo "==> BYO_SAMPLES: $BLESSED_SAMPLES_FILE"
+        
+        # Set environment for BYO samples
+        export OH_EXAMPLES_REPO="$OH_EXAMPLES_REPO"
+        export BYO_SAMPLES="$BLESSED_SAMPLES_FILE"
+        
+        # Clone the examples repository and run publish-only
+        echo "==> Cloning Open Horizon examples repository..."
+        cd /tmp
+        git clone --depth 1 https://github.com/open-horizon/examples.git
+        
+        if [ -d /tmp/examples ]; then
+          cd /tmp/examples
+          
+          # Copy the blessed samples file to the examples directory
+          cp /tmp/$BLESSED_SAMPLES_FILE /tmp/examples/$BLESSED_SAMPLES_FILE
+          
+          # Run publish-only target
+          echo "==> Publishing custom blessed samples..."
+          if make publish-only 2>&1; then
+            echo "✓ Custom blessed samples published successfully"
+          else
+            echo "WARNING: Failed to publish custom blessed samples. Continuing anyway..."
+          fi
+        else
+          echo "WARNING: Failed to clone examples repository. Skipping custom samples."
+        fi
+      fi
+    else
+      if [ -n "$OH_EXAMPLES_REPO" ]; then
+        echo "==> Standard hub provisioning with $OH_EXAMPLES_REPO"
+      else
+        echo "==> Standard hub provisioning (no custom samples specified)"
+      fi
+    fi
   SHELL
 end

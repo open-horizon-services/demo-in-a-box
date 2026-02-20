@@ -53,6 +53,10 @@ Set before `make init`:
 - `MEMORY` — MB per agent VM (default: 2048)
 - `DISK_SIZE` — GB per agent VM (default: 20)
 - `BOX_VERSION` — Custom box version (default: 1.0.0). When set to a date-like value (e.g., 20250415.01.137), also pins the base Vagrant box version for reproducibility.
+- `BLESSED_SAMPLES_FILE` — Filename containing custom sample repository URLs (default: blessedSamples.txt)
+- `OH_EXAMPLES_REPO` — Raw URL to the examples repository (required for custom blessed samples)
+
+See [BLESSED_SAMPLES.md](BLESSED_SAMPLES.md) for detailed instructions on using custom blessed samples.
 
 ### Generated Files (NOT COMMITTED)
 - `Vagrantfile.{unicycle,bicycle,car,semi}` — ERB-generated configs
