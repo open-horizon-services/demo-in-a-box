@@ -26,6 +26,13 @@ make down                           # DESTRUCTIVE: destroy all VMs + clean files
 make rebuild-boxes                  # Build custom Packer base boxes (one-time setup)
 make generate-agent-configs         # Generate agent-install-external.env + agent-install-internal.env
 make status                         # Show Vagrant installation info
+
+# MCP Server Metadata Sync (recommended for use with MCP server)
+make env-create ENV_NAME=my-env     # Create MCP metadata before provisioning
+make env-status ENV_NAME=my-env    # Check MCP metadata status
+make env-delete ENV_NAME=my-env     # Delete MCP metadata after destroy
+make init-sync ENV_NAME=my-env     # Provision with MCP metadata sync
+make destroy-sync ENV_NAME=my-env  # Destroy and remove MCP metadata
 ```
 
 System configuration and OS are set via environment variables before `make init`:

@@ -3,6 +3,13 @@ export HZN_ORG_ID ?= myorg
 
 VMNAME :=
 
+# Environment name for MCP server metadata sync (optional)
+# When set, Makefile operations will create/update metadata in ~/.demo-in-a-box/envs/
+export ENV_NAME ?=
+
+# MCP server metadata directory
+ENV_BASE_DIR := $(HOME)/.demo-in-a-box/envs
+
 # Which system configuration to be provisioned
 export SYSTEM_CONFIGURATION ?= unicycle
 
@@ -352,10 +359,74 @@ add-box: add-boxes
 remove-box: remove-boxes
 rebuild-box: rebuild-boxes
 
+# =============================================================================
+# MCP Server Metadata Sync
+# =============================================================================
+# These targets create/update/remove metadata in ~/.demo-in-a-box/envs/
+# to keep the MCP server's environment list in sync with Makefile operations.
+
+# Validate ENV_NAME is set
+_require-env-name:
+	@if [ -z "$(ENV_NAME)" ]; then \
+		echo "ERROR: ENV_NAME is required. Usage: make init ENV_NAME=my-env"; \
+		exit 1; \
+	fi
+
+# Create MCP server metadata for this environment (run before init)
+# This creates the environment directory structure and metadata file
+env-create: _require-env-name
+	@echo "Creating MCP server metadata for environment: $(ENV_NAME)"
+	@mkdir -p $(ENV_BASE_DIR)/$(ENV_NAME)
+	@mkdir -p $(ENV_BASE_DIR)/$(ENV_NAME)/hub
+	@mkdir -p $(ENV_BASE_DIR)/$(ENV_NAME)/agents
+	@mkdir -p $(ENV_BASE_DIR)/$(ENV_NAME)/ops
+	@TIMESTAMP=$$(date -u +%Y-%m-%dT%H:%M:%SZ) && echo "{\"name\":\"$(ENV_NAME)\",\"system_configuration\":\"$(SYSTEM_CONFIGURATION)\",\"created_at\":\"$$TIMESTAMP\",\"overrides\":{}}" > $(ENV_BASE_DIR)/$(ENV_NAME)/env.json
+	@ln -sf $(PWD)/Makefile $(ENV_BASE_DIR)/$(ENV_NAME)/hub/Makefile 2>/dev/null || true
+	@ln -sf $(PWD)/configuration $(ENV_BASE_DIR)/$(ENV_NAME)/hub/configuration 2>/dev/null || true
+	@ln -sf $(PWD)/configuration/Vagrantfile.hub $(ENV_BASE_DIR)/$(ENV_NAME)/hub/Vagrantfile.hub 2>/dev/null || true
+	@ln -sf $(PWD)/Makefile $(ENV_BASE_DIR)/$(ENV_NAME)/agents/Makefile 2>/dev/null || true
+	@ln -sf $(PWD)/configuration $(ENV_BASE_DIR)/$(ENV_NAME)/agents/configuration 2>/dev/null || true
+	@ln -sf $(PWD)/configuration/Vagrantfile.template.erb $(ENV_BASE_DIR)/$(ENV_NAME)/agents/Vagrantfile.template.erb 2>/dev/null || true
+	@echo "✓ MCP server metadata created at $(ENV_BASE_DIR)/$(ENV_NAME)"
+	@echo ""
+	@echo "Next: Run 'make init ENV_NAME=$(ENV_NAME) SYSTEM_CONFIGURATION=$(SYSTEM_CONFIGURATION)' to provision VMs"
+
+# Delete MCP server metadata for this environment (run after destroy)
+env-delete: _require-env-name
+	@echo "Deleting MCP server metadata for environment: $(ENV_NAME)"
+	@rm -rf $(ENV_BASE_DIR)/$(ENV_NAME)
+	@echo "✓ MCP server metadata deleted: $(ENV_NAME)"
+
+# Initialize environment with MCP server metadata sync (recommended)
+# Combines env-create + init for seamless workflow
+init-sync: env-create init
+	@echo ""
+	@echo "========================================="
+	@echo "✓ Environment '$(ENV_NAME)' provisioned and tracked by MCP server"
+	@echo "========================================="
+
+# Destroy and clean up MCP server metadata
+destroy-sync: destroy destroy-hub clean env-delete
+	@echo "========================================="
+	@echo "✓ Environment '$(ENV_NAME)' destroyed and MCP metadata removed"
+	@echo "========================================="
+
+# Display MCP server sync status
+env-status: _require-env-name
+	@if [ -d "$(ENV_BASE_DIR)/$(ENV_NAME)" ]; then \
+		echo "MCP Server Metadata: EXISTS"; \
+		echo "Location: $(ENV_BASE_DIR)/$(ENV_NAME)"; \
+		cat $(ENV_BASE_DIR)/$(ENV_NAME)/env.json 2>/dev/null || echo "(env.json not found)"; \
+	else \
+		echo "MCP Server Metadata: NOT FOUND"; \
+		echo "Run 'make env-create ENV_NAME=$(ENV_NAME)' to create it"; \
+	fi
+
 .PHONY: default check init up-hub up status down destroy browse connect clean \
         connect-hub status-hub destroy-hub \
         build-box build-boxes build-hub-box build-agent-box \
         add-box add-boxes add-hub-box add-agent-box \
         remove-box remove-boxes remove-hub-box remove-agent-box \
         clean-box rebuild-box rebuild-boxes \
-        build-ubuntu-22 build-ubuntu-24 build-fedora-41
+        build-ubuntu-22 build-ubuntu-24 build-fedora-41 \
+        _require-env-name env-create env-delete init-sync destroy-sync env-status

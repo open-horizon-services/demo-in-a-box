@@ -494,6 +494,45 @@ make agent-config-internal
 
 **Note:** The `agent-install-external.env` configuration requires proper port forwarding from the host to the hub VM. The default hub Vagrantfile includes port forwarding for all required services (ports 3090, 3111, 9008, 9443).
 
+## MCP Server Integration
+
+The Makefile can integrate with the MCP server to keep environment metadata synchronized. This ensures that environments created via Makefile also appear in the MCP server's environment list.
+
+### MCP Server Metadata Sync Targets
+
+```bash
+# Create MCP server metadata before provisioning (required before init)
+make env-create ENV_NAME=my-env SYSTEM_CONFIGURATION=unicycle
+
+# Check MCP server metadata status
+make env-status ENV_NAME=my-env
+
+# Delete MCP server metadata after destroying VMs
+make env-delete ENV_NAME=my-env
+```
+
+### Recommended Workflows
+
+**With MCP Server Sync (recommended):**
+```bash
+# Provision with automatic MCP metadata sync
+make init-sync ENV_NAME=my-env SYSTEM_CONFIGURATION=unicycle
+
+# When done: destroy VMs and remove MCP metadata
+make destroy-sync ENV_NAME=my-env
+```
+
+**Without MCP Server Sync (legacy):**
+```bash
+# Standard provisioning without MCP metadata
+make init
+
+# When done: destroy VMs
+make down
+```
+
+The synced workflow creates metadata in `~/.demo-in-a-box/envs/<ENV_NAME>/` which allows the MCP server to track and manage these environments alongside those created via the MCP server's `env_create` tool.
+
 ## Usage
 
 Run `make connect` to SSH to the first agent VM in _unicycle_ configuration. For all other configurations, specify the "VMNAME" as an argument: `make connect VMNAME=agent3`. The credentials can be set by running `export $(cat agent-install.cfg)`. To test that the installation is configured and working, run the following commands:
