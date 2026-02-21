@@ -13,7 +13,8 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "inspect": "npm run build && npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "keywords": [
     "mcp",

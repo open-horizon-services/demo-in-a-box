@@ -52,27 +52,102 @@ npm run build
 ### Running the Server
 
 ```bash
-npm start
-# Or for development:
-npm run dev
+npm start          # Run compiled server (requires npm run build first)
+npm run dev        # Run with tsx — no build step, for development
 ```
 
 The server communicates via stdio using the MCP protocol.
 
-### MCP Client Configuration
+## IDE Integration
 
-Example configuration for Claude Desktop or other MCP clients:
+The server's location and repository root are resolved automatically from the
+compiled file path.  If needed, override with the `DEMO_IN_A_BOX_REPO_ROOT`
+environment variable.
+
+### VS Code (v1.99+ with GitHub Copilot or Claude extension)
+
+The repo ships a `.vscode/mcp.json` that VS Code picks up automatically.  Open
+the workspace root and VS Code will offer to enable the server.
+
+To configure manually, create `.vscode/mcp.json` in the repo root:
+
+```json
+{
+  "servers": {
+    "demo-in-a-box": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/mcp-server/dist/index.js"],
+      "env": {
+        "DEMO_IN_A_BOX_REPO_ROOT": "${workspaceFolder}"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project-scoped):
 
 ```json
 {
   "mcpServers": {
     "demo-in-a-box": {
       "command": "node",
-      "args": ["/path/to/demo-in-a-box/mcp-server/dist/index.js"]
+      "args": ["/absolute/path/to/demo-in-a-box/mcp-server/dist/index.js"],
+      "env": {
+        "DEMO_IN_A_BOX_REPO_ROOT": "/absolute/path/to/demo-in-a-box"
+      }
     }
   }
 }
 ```
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
+(macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "demo-in-a-box": {
+      "command": "node",
+      "args": ["/absolute/path/to/demo-in-a-box/mcp-server/dist/index.js"],
+      "env": {
+        "DEMO_IN_A_BOX_REPO_ROOT": "/absolute/path/to/demo-in-a-box"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving the config file.
+
+## Testing the Server
+
+### MCP Inspector (recommended during development)
+
+The official browser-based tool for interactive testing — no AI client needed:
+
+```bash
+cd mcp-server
+npm run inspect
+# Opens http://localhost:5173 with all 12 tools available
+```
+
+Browse tools, fill in inputs, and inspect raw JSON responses without spinning
+up a full AI client.
+
+### Development test client
+
+```bash
+npm run dev   # keep the server running on stdio
+```
+
+Then connect any MCP-compatible client (Claude Desktop, Cursor, VS Code) and
+interact through natural language.
 
 ## Available Tools
 

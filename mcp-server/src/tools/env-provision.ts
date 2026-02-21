@@ -1,9 +1,8 @@
 import { z } from 'zod';
+import { join } from 'path';
 import { EnvironmentManager } from '../env/manager.js';
 import { CommandExecutor } from '../vagrant/executor.js';
-import { OperationLedger } from '../ops/ledger.js';
-import { lockManager } from '../env/locks.js';
-import { join } from 'path';
+import { runAsyncOperation } from '../ops/async-operation.js';
 
 export const EnvProvisionInputSchema = z.object({
   env_name: z.string(),
@@ -12,89 +11,57 @@ export const EnvProvisionInputSchema = z.object({
 
 export async function envProvisionHandler(args: unknown) {
   const input = EnvProvisionInputSchema.parse(args);
-  
+
   const envManager = new EnvironmentManager();
   const config = await envManager.getEnv(input.env_name);
-  
+
   const envDir = envManager.getEnvDir(input.env_name);
   const opsDir = join(envDir, 'ops');
-  
-  const ledger = new OperationLedger(opsDir);
-  const { id: operationId, logger } = await ledger.createOperation(input.env_name, 'provision');
 
-  Promise.resolve().then(async () => {
-    try {
-      await lockManager.withEnvLock(input.env_name, async () => {
-        await lockManager.withGlobalSlot(async () => {
-          await ledger.updateOperation(operationId, {
-            status: 'running',
-            started_at: new Date().toISOString(),
-          });
+  const envVars: Record<string, string> = {
+    SYSTEM_CONFIGURATION: config.system_configuration,
+  };
+  if (config.overrides?.num_agents)    envVars.NUM_AGENTS    = String(config.overrides.num_agents);
+  if (config.overrides?.base_ip)       envVars.BASE_IP       = String(config.overrides.base_ip);
+  if (config.overrides?.memory_mb)     envVars.MEMORY        = String(config.overrides.memory_mb);
+  if (config.overrides?.disk_gb)       envVars.DISK_SIZE     = String(config.overrides.disk_gb);
+  if (config.overrides?.hub_os_type)   envVars.HUB_OS_TYPE   = config.overrides.hub_os_type;
+  if (config.overrides?.agent_os_type) envVars.AGENT_OS_TYPE = config.overrides.agent_os_type;
+  if (config.overrides?.box_version)   envVars.BOX_VERSION   = config.overrides.box_version;
 
-          const executor = new CommandExecutor();
-          
-          if (input.force_recreate) {
-            logger.writeLine(`[${new Date().toISOString()}] Running make down to clean up existing VMs...`);
-            const downResult = await executor.executeMake('down', [], {
-              cwd: envDir,
-              logFile: join(opsDir, `op-${operationId}.log`),
-            });
-            
-            if (downResult.exit_code !== 0) {
-              logger.writeLine(`[${new Date().toISOString()}] Warning: make down failed, continuing anyway...`);
-            }
-          }
+  const forceRecreate = input.force_recreate;
 
-          logger.writeLine(`[${new Date().toISOString()}] Starting provision for ${config.system_configuration}...`);
-          
-          const envVars: Record<string, string> = {
-            SYSTEM_CONFIGURATION: config.system_configuration,
-          };
+  const operationId = await runAsyncOperation(
+    input.env_name,
+    opsDir,
+    'provision',
+    async (opId, logger) => {
+      const executor = new CommandExecutor();
 
-          if (config.overrides?.num_agents) {
-            envVars.NUM_AGENTS = String(config.overrides.num_agents);
-          }
-          if (config.overrides?.base_ip) {
-            envVars.BASE_IP = String(config.overrides.base_ip);
-          }
-          if (config.overrides?.memory_mb) {
-            envVars.MEMORY = String(config.overrides.memory_mb);
-          }
-          if (config.overrides?.disk_gb) {
-            envVars.DISK_SIZE = String(config.overrides.disk_gb);
-          }
-
-          const result = await executor.executeMake('init', [], {
-            cwd: envDir,
-            env: envVars,
-            logFile: join(opsDir, `op-${operationId}.log`),
-            timeout: 3600000,
-          });
-
-          logger.writeLine(`[${new Date().toISOString()}] Provision completed with exit code ${result.exit_code}`);
-
-          await ledger.updateOperation(operationId, {
-            status: result.exit_code === 0 ? 'succeeded' : 'failed',
-            finished_at: new Date().toISOString(),
-            exit_code: result.exit_code,
-            error_summary: result.exit_code !== 0 ? 'Provisioning failed. Check logs for details.' : undefined,
-          });
-
-          await logger.close();
+      if (forceRecreate) {
+        logger.writeLine(`[${new Date().toISOString()}] Running make down to clean up existing VMs...`);
+        const downResult = await executor.executeMake('down', [], {
+          cwd: envDir,
+          logFile: join(opsDir, `op-${opId}.log`),
         });
-      });
-    } catch (error: any) {
-      logger.writeLine(`[${new Date().toISOString()}] ERROR: ${error.message}`);
-      
-      await ledger.updateOperation(operationId, {
-        status: 'failed',
-        finished_at: new Date().toISOString(),
-        error_summary: error.message,
+        if (downResult.exit_code !== 0) {
+          logger.writeLine(`[${new Date().toISOString()}] Warning: make down failed (exit ${downResult.exit_code}), continuing...`);
+        }
+      }
+
+      logger.writeLine(`[${new Date().toISOString()}] Starting provision for ${config.system_configuration}...`);
+
+      const result = await executor.executeMake('init', [], {
+        cwd: envDir,
+        env: envVars,
+        logFile: join(opsDir, `op-${opId}.log`),
+        timeout: 3600000,
       });
 
-      await logger.close();
+      logger.writeLine(`[${new Date().toISOString()}] Provision completed with exit code ${result.exit_code}`);
+      return result.exit_code;
     }
-  });
+  );
 
   const response = {
     success: true,

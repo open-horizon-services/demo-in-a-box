@@ -2,15 +2,18 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { EnvironmentManager } from '../../src/env/manager.js';
 import { rm } from 'fs/promises';
 import { join } from 'path';
-import { homedir } from 'os';
+import { tmpdir } from 'os';
 
-const TEST_ENV_BASE = join(homedir(), '.demo-in-a-box-test', 'envs');
+// Each test run gets its own isolated directory under the OS temp folder so
+// that tests never read from or write to the production ~/.demo-in-a-box/envs.
+let TEST_ENV_BASE: string;
 
 describe('EnvironmentManager', () => {
   let manager: EnvironmentManager;
 
   beforeEach(() => {
-    manager = new EnvironmentManager();
+    TEST_ENV_BASE = join(tmpdir(), `demo-in-a-box-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    manager = new EnvironmentManager(TEST_ENV_BASE);
   });
 
   afterEach(async () => {
@@ -69,6 +72,24 @@ describe('EnvironmentManager', () => {
         memory_mb: 4096,
         disk_gb: 30,
       });
+    });
+
+    it('should create environment with OS type overrides', async () => {
+      const input = {
+        name: 'test-env-os',
+        system_configuration: 'unicycle' as const,
+        overrides: {
+          hub_os_type: 'ubuntu-24' as const,
+          agent_os_type: 'fedora-41' as const,
+          box_version: '2.0.0',
+        },
+      };
+
+      const result = await manager.createEnv(input);
+
+      expect(result.overrides?.hub_os_type).toBe('ubuntu-24');
+      expect(result.overrides?.agent_os_type).toBe('fedora-41');
+      expect(result.overrides?.box_version).toBe('2.0.0');
     });
   });
 

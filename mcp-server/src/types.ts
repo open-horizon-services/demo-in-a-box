@@ -4,6 +4,8 @@ export type OperationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'c
 
 export type VMState = 'running' | 'stopped' | 'not_created' | 'saved' | 'poweroff' | 'aborted';
 
+export type OsType = 'ubuntu-22' | 'ubuntu-24' | 'fedora-41';
+
 export interface EnvironmentConfig {
   name: string;
   system_configuration: SystemConfiguration;
@@ -12,6 +14,9 @@ export interface EnvironmentConfig {
     disk_gb?: number;
     base_ip?: number;
     num_agents?: number;
+    hub_os_type?: OsType;
+    agent_os_type?: OsType;
+    box_version?: string;
   };
   created_at: string;
 }

@@ -5,6 +5,12 @@ import { DEFAULT_CONFIGS, ENV_BASE_DIR, REPO_ROOT } from './config.js';
 import { EnvironmentConfigInput, EnvironmentConfigSchema } from './types.js';
 
 export class EnvironmentManager {
+  private readonly baseDir: string;
+
+  constructor(baseDir?: string) {
+    this.baseDir = baseDir ?? ENV_BASE_DIR;
+  }
+
   async createEnv(input: EnvironmentConfigInput): Promise<EnvironmentMetadata> {
     const config: EnvironmentConfig = {
       ...input,
@@ -69,14 +75,14 @@ export class EnvironmentManager {
 
   async listEnvs(): Promise<EnvironmentMetadata[]> {
     try {
-      await mkdir(ENV_BASE_DIR, { recursive: true });
-      const entries = await readdir(ENV_BASE_DIR);
-      
+      await mkdir(this.baseDir, { recursive: true });
+      const entries = await readdir(this.baseDir);
+
       const envs: EnvironmentMetadata[] = [];
-      
+
       for (const entry of entries) {
         try {
-          const envDir = join(ENV_BASE_DIR, entry);
+          const envDir = join(this.baseDir, entry);
           const stats = await stat(envDir);
           
           if (stats.isDirectory()) {
@@ -132,7 +138,7 @@ export class EnvironmentManager {
   }
 
   getEnvDir(name: string): string {
-    return join(ENV_BASE_DIR, name);
+    return join(this.baseDir, name);
   }
 
   getDefaultConfig(systemConfig: 'unicycle' | 'bicycle' | 'car' | 'semi') {

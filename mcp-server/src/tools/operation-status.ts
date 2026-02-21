@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { EnvironmentManager } from '../env/manager.js';
-import { OperationLedger } from '../ops/ledger.js';
-import { join } from 'path';
+import { requireOperation } from '../ops/find-operation.js';
 
 export const OperationStatusInputSchema = z.object({
   operation_id: z.string(),
@@ -9,27 +8,11 @@ export const OperationStatusInputSchema = z.object({
 
 export async function operationStatusHandler(args: unknown) {
   const input = OperationStatusInputSchema.parse(args);
-  
+
   const envManager = new EnvironmentManager();
-  const envs = await envManager.listEnvs();
-  
-  let operation = null;
-  
-  for (const env of envs) {
-    const opsDir = join(env.path, 'ops');
-    const ledger = new OperationLedger(opsDir);
-    
-    try {
-      operation = await ledger.getOperation(input.operation_id);
-      break;
-    } catch {}
-  }
+  const { operation } = await requireOperation(input.operation_id, envManager);
 
-  if (!operation) {
-    throw new Error(`Operation "${input.operation_id}" not found`);
-  }
-
-  const response: any = {
+  const response: Record<string, unknown> = {
     success: true,
     operation,
   };

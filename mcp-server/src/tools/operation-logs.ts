@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { EnvironmentManager } from '../env/manager.js';
-import { OperationLedger } from '../ops/ledger.js';
 import { join } from 'path';
+import { readFile } from 'fs/promises';
+import { EnvironmentManager } from '../env/manager.js';
+import { requireOperation } from '../ops/find-operation.js';
 
 export const OperationLogsInputSchema = z.object({
   operation_id: z.string(),
@@ -12,34 +13,46 @@ export const OperationLogsInputSchema = z.object({
 
 export async function operationLogsHandler(args: unknown) {
   const input = OperationLogsInputSchema.parse(args);
-  
+
   const envManager = new EnvironmentManager();
-  const envs = await envManager.listEnvs();
-  
-  let logs = null;
-  
-  for (const env of envs) {
-    const opsDir = join(env.path, 'ops');
-    const ledger = new OperationLedger(opsDir);
-    
-    try {
-      logs = await ledger.getOperationLogs(input.operation_id, input.offset, input.limit);
-      break;
-    } catch {}
+  const { opsDir } = await requireOperation(input.operation_id, envManager);
+
+  const logPath = join(opsDir, `op-${input.operation_id}.log`);
+
+  let allLines: string[] = [];
+  try {
+    const content = await readFile(logPath, 'utf-8');
+    allLines = content.split('\n');
+  } catch (error: any) {
+    if (error.code !== 'ENOENT') throw error;
+    // Log file not yet created — return empty result
   }
 
-  if (!logs) {
-    throw new Error(`Logs for operation "${input.operation_id}" not found`);
+  let lines: string[];
+  let offset: number;
+  let nextOffset: number;
+
+  if (input.tail) {
+    // Return the last `limit` lines, ignoring `offset`
+    const start = Math.max(0, allLines.length - input.limit);
+    lines = allLines.slice(start);
+    offset = start;
+    nextOffset = allLines.length;
+  } else {
+    lines = allLines.slice(input.offset, input.offset + input.limit);
+    offset = input.offset;
+    nextOffset = input.offset + lines.length;
   }
 
   const response = {
     success: true,
     operation_id: input.operation_id,
-    offset: input.offset,
+    offset,
     limit: input.limit,
-    lines_returned: logs.lines.length,
-    next_offset: logs.next_offset,
-    logs: logs.lines.join('\n'),
+    tail: input.tail,
+    lines_returned: lines.length,
+    next_offset: nextOffset,
+    logs: lines.join('\n'),
   };
 
   return {

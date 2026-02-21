@@ -103,16 +103,9 @@ export class LockManager {
 
 export const lockManager = new LockManager();
 
+// Best-effort synchronous release on normal exit.
+// SIGINT/SIGTERM are handled in server.ts so that server.close() and
+// lockManager.releaseAll() both run in the correct order.
 process.on('exit', () => {
   lockManager.releaseAll();
-});
-
-process.on('SIGINT', async () => {
-  await lockManager.releaseAll();
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  await lockManager.releaseAll();
-  process.exit(0);
 });

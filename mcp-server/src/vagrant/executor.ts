@@ -55,7 +55,8 @@ export class CommandExecutor {
       const child = spawn(cmd, args, {
         cwd: options.cwd,
         env,
-        shell: true,
+        // shell: false (default) — args are passed directly to the process so
+        // shell metacharacters in arguments cannot be interpreted locally.
       });
 
       let logStream: ReturnType<typeof createWriteStream> | null = null;

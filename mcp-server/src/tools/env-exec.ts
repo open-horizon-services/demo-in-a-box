@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { EnvironmentManager } from '../env/manager.js';
 import { CommandExecutor } from '../vagrant/executor.js';
-import { join } from 'path';
+import { resolveVMTarget } from '../vagrant/target.js';
 
 export const EnvExecInputSchema = z.object({
   env_name: z.string(),
@@ -12,30 +12,25 @@ export const EnvExecInputSchema = z.object({
 
 export async function envExecHandler(args: unknown) {
   const input = EnvExecInputSchema.parse(args);
-  
+
+  // Strip characters that could alter argument boundaries on the remote shell
+  // (`$` for variable expansion, backticks for command substitution).
+  // Note: with shell:false in spawn, these only matter at the remote VM level.
   const sanitizedCommand = input.command.replace(/[`$]/g, '');
-  
+
   const envManager = new EnvironmentManager();
   const executor = new CommandExecutor();
-  
-  const envDir = envManager.getEnvDir(input.env_name);
-  
-  let cwd: string;
-  let vagrantfile: string;
-  let targetVM: string;
-  
-  if (input.target === 'hub') {
-    cwd = join(envDir, 'hub');
-    vagrantfile = 'Vagrantfile.hub';
-    targetVM = 'default';
-  } else {
-    const config = await envManager.getEnv(input.env_name);
-    cwd = join(envDir, 'agents');
-    vagrantfile = `Vagrantfile.${config.system_configuration}`;
-    targetVM = input.target;
-  }
 
-  const result = await executor.executeVagrant('ssh', [targetVM, '-c', `"${sanitizedCommand}"`], {
+  const { cwd, vagrantfile, vmName } = await resolveVMTarget(
+    input.env_name,
+    input.target,
+    envManager
+  );
+
+  // Pass the command as a separate argument — no extra quoting needed because
+  // spawn (shell:false) passes args directly to the process without a shell
+  // interpreting them locally.
+  const result = await executor.executeVagrant('ssh', [vmName, '-c', sanitizedCommand], {
     cwd,
     env: { VAGRANT_VAGRANTFILE: vagrantfile },
     timeout: input.timeout_ms,
