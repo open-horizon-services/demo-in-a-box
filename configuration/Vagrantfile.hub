@@ -1,6 +1,7 @@
 Vagrant.configure("2") do |config|
   hub_ip = ENV.fetch('HUB_IP', '192.168.56.10')
-  
+  expose_registry_port = ENV.fetch('EXPOSE_REGISTRY_PORT', 'false')
+
   # Use hub-specific box (allows mixed OS)
   config.vm.box = ENV.fetch('HUB_BOX_NAME', 'demo-in-a-box/ubuntu-jammy-horizon')
   # Only set box_version for date-like versions (for base box pinning)
@@ -16,6 +17,11 @@ Vagrant.configure("2") do |config|
   config.vm.network "forwarded_port", guest: 3111, host: 3111, auto_correct: true
   config.vm.network "forwarded_port", guest: 9008, host: 9008, auto_correct: true
   config.vm.network "forwarded_port", guest: 9443, host: 9443, auto_correct: true
+  # Optional: forward registry port to host for external device (e.g. Raspberry Pi) access
+  # Enable by setting EXPOSE_REGISTRY_PORT=true before 'make init'
+  if expose_registry_port == 'true'
+    config.vm.network "forwarded_port", guest: 5000, host: 5000, auto_correct: true
+  end
   config.vm.provider "virtualbox" do |vb|
     vb.memory = "4096"
     vb.linked_clone = true
@@ -246,18 +252,19 @@ EOF
     echo "✓ Local Docker registry setup complete"
     
     # ===== Phase 2: Blessed Samples Core Build Pipeline =====
-    if [ -f /vagrant/blessedSamples.txt ]; then
-      echo "==> blessedSamples.txt detected; running blessed samples build pipeline"
+    # Delegated to scripts/build-blessed-samples.sh (Issue #34).
+    # OH_EXAMPLES_REPO is exported so make publish targets inherit it.
+    # Non-fatal: provisioning succeeds even if blessed samples build fails.
+    if [ -f /vagrant/scripts/build-blessed-samples.sh ]; then
       chmod +x /vagrant/scripts/build-blessed-samples.sh
+      export OH_EXAMPLES_REPO="${OH_EXAMPLES_REPO:-https://raw.githubusercontent.com/open-horizon/examples/master}"
       BLESSED_SAMPLES_FILE=/vagrant/blessedSamples.txt \
-      LOG_FILE=/vagrant/blessed-samples-build.log \
-      SUMMARY_FILE=/vagrant/blessed-samples-summary.log \
       HUB_IP="${HUB_IP}" \
       REGISTRY_URL="${HUB_IP}:5000" \
       BLESSED_SAMPLES_CREDENTIALS=/vagrant/mycreds.env \
-      /vagrant/scripts/build-blessed-samples.sh
+      /vagrant/scripts/build-blessed-samples.sh /vagrant/blessedSamples.txt || true
     else
-      echo "==> No blessedSamples.txt found; skipping blessed samples build pipeline"
+      echo "==> scripts/build-blessed-samples.sh not found; skipping blessed samples build pipeline"
     fi
   SHELL
 end

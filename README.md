@@ -263,6 +263,20 @@ graph TD
 - **Blue Nodes**: Agent VM components
 - **Green Node**: Host machine
 
+## Blessed Samples
+
+Demo-in-a-Box can automatically build and publish additional Open Horizon services during provisioning via the optional `blessedSamples.txt` file.
+
+Create the file in the project root and list service repositories — one per line:
+```
+https://github.com/open-horizon-services/web-helloworld-python.git
+https://github.com/open-horizon/examples.git master edge/services/helloworld
+```
+
+Services are cloned, built, pushed to a local container registry at `192.168.56.10:5000`, and published to the Exchange during `make up-hub`. A build summary is saved to `blessed-samples-build-latest.log`.
+
+See [BLESSED_SAMPLES.md](BLESSED_SAMPLES.md) for full documentation, format reference, environment variables, and troubleshooting.
+
 ## Installation
 
 Clone the repository, then `cd` into the repo folder.

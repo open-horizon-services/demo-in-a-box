@@ -1,502 +1,595 @@
-#!/bin/bash
-# build-blessed-samples.sh
-# Phase 2 Core Build Pipeline for blessed samples support
+#!/usr/bin/env bash
+# scripts/build-blessed-samples.sh
+#
+# Build and publish Open Horizon services listed in blessedSamples.txt.
+# Supports both the Issue #21 single-URL format and the Issue #34 enhanced
+# 4-field format:
+#   <git_repo_url> [<branch_or_tag>] [<service_path>] [<arch>]
+#
+# Environment variables (all optional):
+#   BLESSED_SAMPLES_FILE    Path to blessedSamples.txt  (default: ./blessedSamples.txt)
+#   FAIL_FAST               Set to "true" to abort on first failure
+#   USE_LOCAL_REGISTRY      Set to "true" to rewrite image names with registry prefix
+#   REGISTRY_URL            Local registry URL           (default: 192.168.56.10:5000)
+#   OH_EXAMPLES_REPO        Examples repo base URL       (passed through to make publish)
+#   BLESSED_SAMPLES_CREDENTIALS  Path to credentials file (default: ./mycreds.env)
+#   LOG_FILE                Path to log file override (optional; auto-generated if unset)
+#   SUMMARY_FILE            Path for summary file (optional)
+#   HUB_IP                  Hub VM IP (default: 192.168.56.10)
 
-set -euo pipefail
+set -uo pipefail
 
-BLESSED_SAMPLES_FILE="${BLESSED_SAMPLES_FILE:-/vagrant/blessedSamples.txt}"
-LOG_FILE="${LOG_FILE:-/var/log/blessed-samples-build.log}"
-SUMMARY_FILE="${SUMMARY_FILE:-/var/log/blessed-samples-summary.log}"
-WORK_DIR="${WORK_DIR:-/tmp/blessed-samples}"
-HUB_IP="${HUB_IP:-192.168.56.10}"
-REGISTRY_URL="${REGISTRY_URL:-${HUB_IP}:5000}"
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+BLESSED_SAMPLES_FILE="${BLESSED_SAMPLES_FILE:-./blessedSamples.txt}"
+FAIL_FAST="${FAIL_FAST:-false}"
+USE_LOCAL_REGISTRY="${USE_LOCAL_REGISTRY:-false}"
+REGISTRY_URL="${REGISTRY_URL:-192.168.56.10:5000}"
 OH_EXAMPLES_REPO="${OH_EXAMPLES_REPO:-https://raw.githubusercontent.com/open-horizon/examples/master}"
-BLESSED_SAMPLES_CREDENTIALS="${BLESSED_SAMPLES_CREDENTIALS:-/vagrant/mycreds.env}"
-FAIL_FAST="${FAIL_FAST:-1}"
-MANUAL_ORDER_OVERRIDE="${MANUAL_ORDER_OVERRIDE:-0}"
+BLESSED_SAMPLES_CREDENTIALS="${BLESSED_SAMPLES_CREDENTIALS:-./mycreds.env}"
+HUB_IP="${HUB_IP:-192.168.56.10}"
+WORK_DIR="/tmp/blessed-samples"
 
-declare -a ENTRY_IDS=()
-declare -a BUILD_ORDER=()
-declare -a SUMMARY_LINES=()
-declare -A ENTRY_REPO=()
-declare -A ENTRY_BRANCH=()
-declare -A ENTRY_PATH=()
-declare -A ENTRY_ARCH=()
-declare -A ENTRY_CLONE_DIR=()
-declare -A ENTRY_SERVICE_DIR=()
-declare -A ENTRY_SERVICE_KEY=()
-declare -A ENTRY_IMAGE=()
-declare -A ENTRY_STATUS=()
-declare -A ENTRY_MESSAGE=()
-declare -A SERVICE_TO_ENTRY=()
-declare -A DEPENDS_ON=()
-declare -A IN_DEGREE=()
-declare -A ADJACENCY=()
+# Log file: use override if provided, else generate timestamped name
+if [ -z "${LOG_FILE:-}" ]; then
+  LOG_TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+  LOG_FILE="/var/log/blessed-samples-build-${LOG_TIMESTAMP}.log"
+fi
 
-CONTAINER_RUNTIME=""
-CONTAINER_PUSH_CMD=""
-HZN_ORG_ID_VALUE=""
-HZN_EXCHANGE_USER_AUTH_VALUE=""
+# Host-visible copy (via Vagrant shared folder)
+LOG_HOST_COPY="/vagrant/blessed-samples-build-latest.log"
 
-timestamp() {
-    date '+%Y-%m-%d %H:%M:%S'
+# Counters
+SUCCESS_COUNT=0
+FAILURE_COUNT=0
+FAILED_SERVICES=()
+
+# ---------------------------------------------------------------------------
+# 1. Logging
+# ---------------------------------------------------------------------------
+init_logging() {
+  mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+  # Tee all output to log file; fall back to stdout-only if log dir unavailable
+  if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null; then
+    exec 1> >(tee -a "$LOG_FILE")
+    exec 2>&1
+  fi
+  echo "=== Blessed Samples Build Started: $(date) ==="
+  echo "=== BLESSED_SAMPLES_FILE: ${BLESSED_SAMPLES_FILE} ==="
+  echo "=== OH_EXAMPLES_REPO: ${OH_EXAMPLES_REPO} ==="
+  echo "=== REGISTRY_URL: ${REGISTRY_URL} ==="
 }
 
-log() {
-    echo "[$(timestamp)] $*" | tee -a "${LOG_FILE}"
+copy_log_to_host() {
+  if [ -f "$LOG_FILE" ] && [ -d "/vagrant" ]; then
+    cp "$LOG_FILE" "$LOG_HOST_COPY" 2>/dev/null || true
+    echo "=== Log copied to ${LOG_HOST_COPY} ==="
+  fi
+  # Also write summary file if requested
+  if [ -n "${SUMMARY_FILE:-}" ]; then
+    {
+      echo "=== Blessed Samples Build Summary: $(date) ==="
+      echo "Successful: ${SUCCESS_COUNT}"
+      echo "Failed: ${FAILURE_COUNT}"
+      if [ "${#FAILED_SERVICES[@]}" -gt 0 ]; then
+        echo "Failed services:"
+        for svc in "${FAILED_SERVICES[@]}"; do
+          echo "  - ${svc}"
+        done
+      fi
+    } > "$SUMMARY_FILE" 2>/dev/null || true
+  fi
 }
 
-log_info() {
-    log "INFO: $*"
-}
+# Always copy log on exit (success or failure)
+trap copy_log_to_host EXIT
 
-log_error() {
-    log "ERROR: $*" >&2
-}
-
-fail() {
-    log_error "$*"
-    exit 1
-}
-
-trim() {
-    local value="${1:-}"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    printf '%s' "${value}"
-}
-
-init_log() {
-    mkdir -p "$(dirname "${LOG_FILE}")" "$(dirname "${SUMMARY_FILE}")" "${WORK_DIR}"
-    : > "${LOG_FILE}"
-    : > "${SUMMARY_FILE}"
-
-    log "=========================================="
-    log "Blessed Samples Build Script - Phase 2"
-    log "=========================================="
-    log "Configuration:"
-    log "  Blessed Samples File: ${BLESSED_SAMPLES_FILE}"
-    log "  Log File: ${LOG_FILE}"
-    log "  Summary File: ${SUMMARY_FILE}"
-    log "  Work Dir: ${WORK_DIR}"
-    log "  Hub IP: ${HUB_IP}"
-    log "  Registry URL: ${REGISTRY_URL}"
-    log "  OH_EXAMPLES_REPO: ${OH_EXAMPLES_REPO}"
-    log "  Credentials File: ${BLESSED_SAMPLES_CREDENTIALS}"
-    log "  Fail Fast: ${FAIL_FAST}"
-    log "  Manual Order Override: ${MANUAL_ORDER_OVERRIDE}"
-    log ""
-}
-
+# ---------------------------------------------------------------------------
+# 2. Pre-flight checks
+# ---------------------------------------------------------------------------
 check_config_file() {
-    if [ ! -f "${BLESSED_SAMPLES_FILE}" ]; then
-        log_info "No blessedSamples.txt file found at ${BLESSED_SAMPLES_FILE}"
-        log_info "Skipping blessed samples build"
-        exit 0
-    fi
+  if [ ! -f "$BLESSED_SAMPLES_FILE" ]; then
+    echo "No blessedSamples.txt found at '${BLESSED_SAMPLES_FILE}'. Skipping blessed samples build."
+    exit 0
+  fi
 }
 
-validate_repo_url() {
-    local repo_url="$1"
-    if [[ "${repo_url}" =~ ^https?://.+\.git$ ]]; then
-        return 0
-    fi
-
-    if [[ "${repo_url}" =~ ^https?:// ]]; then
-        return 0
-    fi
-
-    return 1
-}
-
-validate_branch() {
-    local branch="$1"
-    [ -z "${branch}" ] && return 0
-    [[ "${branch}" =~ ^[a-zA-Z0-9/_.-]+$ ]]
-}
-
-validate_service_path() {
-    local service_path="$1"
-    [ -z "${service_path}" ] && return 0
-    [[ ! "${service_path}" =~ ^/ ]] && [[ ! "${service_path}" =~ \.\. ]]
-}
-
-validate_arches() {
-    local arch="$1"
-    local valid_archs="amd64|arm64|arm|ppc64le|s390x"
-    local part
-
-    [ -z "${arch}" ] && return 0
-
-    IFS=',' read -ra arch_parts <<< "${arch}"
-    for part in "${arch_parts[@]}"; do
-        part="$(trim "${part}")"
-        [[ "${part}" =~ ^(${valid_archs})$ ]] || return 1
-    done
-}
-
-parse_config() {
-    local line line_num=0 field_count repo branch service_path arch entry_id
-    local valid_count=0
-
-    while IFS= read -r line || [[ -n "${line}" ]]; do
-        ((line_num++))
-        line="$(trim "${line}")"
-
-        if [[ -z "${line}" ]] || [[ "${line}" =~ ^# ]]; then
-            continue
-        fi
-
-        field_count=$(wc -w <<< "${line}" | tr -d ' ')
-        repo=""
-        branch=""
-        service_path=""
-        arch="amd64"
-
-        case "${field_count}" in
-            1)
-                repo="${line}"
-                branch="master"
-                ;;
-            2)
-                read -r repo branch <<< "${line}"
-                ;;
-            3)
-                read -r repo branch service_path <<< "${line}"
-                ;;
-            4)
-                read -r repo branch service_path arch <<< "${line}"
-                ;;
-            *)
-                fail "Line ${line_num}: Invalid format. Expected 1-4 whitespace-separated fields."
-                ;;
-        esac
-
-        validate_repo_url "${repo}" || fail "Line ${line_num}: Invalid repository URL: ${repo}"
-        validate_branch "${branch}" || fail "Line ${line_num}: Invalid branch name: ${branch}"
-        validate_service_path "${service_path}" || fail "Line ${line_num}: Invalid service path: ${service_path}"
-        validate_arches "${arch}" || fail "Line ${line_num}: Invalid architecture list: ${arch}"
-
-        entry_id="entry_${valid_count}"
-        ENTRY_IDS+=("${entry_id}")
-        ENTRY_REPO["${entry_id}"]="${repo}"
-        ENTRY_BRANCH["${entry_id}"]="${branch}"
-        ENTRY_PATH["${entry_id}"]="${service_path}"
-        ENTRY_ARCH["${entry_id}"]="${arch}"
-        ENTRY_STATUS["${entry_id}"]="pending"
-        ENTRY_MESSAGE["${entry_id}"]="parsed"
-
-        log_info "Parsed ${entry_id}: repo=${repo} branch=${branch} path=${service_path:-<auto>} arch=${arch}"
-        ((valid_count++))
-    done < "${BLESSED_SAMPLES_FILE}"
-
-    if [ ${#ENTRY_IDS[@]} -eq 0 ]; then
-        log_info "No active entries found in ${BLESSED_SAMPLES_FILE}"
-        exit 0
-    fi
-}
-
+# ---------------------------------------------------------------------------
+# 3. Container runtime detection
+# ---------------------------------------------------------------------------
 detect_container_runtime() {
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        CONTAINER_RUNTIME="docker"
-        CONTAINER_PUSH_CMD="docker"
-    elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-        CONTAINER_RUNTIME="podman"
-        CONTAINER_PUSH_CMD="podman"
-    else
-        fail "Neither Docker nor Podman is available and functional"
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    echo "docker"
+  elif command -v podman >/dev/null 2>&1; then
+    echo "podman"
+  else
+    echo "ERROR: Neither Docker nor Podman found on this system" >&2
+    exit 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 4. Config file parser
+#    Emits lines of the form:  repo|branch|path|arch
+# ---------------------------------------------------------------------------
+parse_config() {
+  local file="$1"
+  local line_num=0
+
+  while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    ((line_num++)) || true
+    # Strip leading/trailing whitespace
+    local line
+    line=$(echo "$raw_line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    # Skip comments and blank lines
+    [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+
+    # Count fields
+    local field_count
+    field_count=$(echo "$line" | awk '{print NF}')
+
+    local repo branch svc_path arch
+
+    if [ "$field_count" -lt 1 ] || [ "$field_count" -gt 4 ]; then
+      echo "ERROR: Invalid line format (expected 1-4 fields, got ${field_count}) at line ${line_num}: ${line}" >&2
+      continue
     fi
 
-    log_info "Using container runtime: ${CONTAINER_RUNTIME}"
-}
+    read -r repo branch svc_path arch <<< "$(echo "$line" | awk '{print $1, $2, $3, $4}')"
 
-load_credentials() {
-    if [ ! -f "${BLESSED_SAMPLES_CREDENTIALS}" ]; then
-        fail "Credentials file not found: ${BLESSED_SAMPLES_CREDENTIALS}"
-    fi
+    # Apply defaults for missing fields
+    branch="${branch:-master}"
+    svc_path="${svc_path:-}"
+    arch="${arch:-amd64}"
 
-    # shellcheck disable=SC1090
-    source "${BLESSED_SAMPLES_CREDENTIALS}"
-
-    HZN_ORG_ID_VALUE="${HZN_ORG_ID:-}"
-    HZN_EXCHANGE_USER_AUTH_VALUE="${HZN_EXCHANGE_USER_AUTH:-}"
-
-    [ -n "${HZN_ORG_ID_VALUE}" ] || fail "HZN_ORG_ID missing from credentials file"
-    [ -n "${HZN_EXCHANGE_USER_AUTH_VALUE}" ] || fail "HZN_EXCHANGE_USER_AUTH missing from credentials file"
-
-    log_info "Loaded exchange credentials for org: ${HZN_ORG_ID_VALUE}"
-}
-
-repo_basename() {
-    local repo_url="$1"
-    local name
-    name="$(basename "${repo_url}")"
-    name="${name%.git}"
-    printf '%s' "${name}"
-}
-
-clone_repo() {
-    local entry_id="$1"
-    local repo_url="${ENTRY_REPO[${entry_id}]}"
-    local branch="${ENTRY_BRANCH[${entry_id}]}"
-    local repo_name clone_dir
-
-    repo_name="$(repo_basename "${repo_url}")"
-    clone_dir="${WORK_DIR}/${entry_id}-${repo_name}"
-
-    rm -rf "${clone_dir}"
-    log_info "Cloning ${repo_url} (branch/tag: ${branch}) into ${clone_dir}"
-    git clone --depth 1 --branch "${branch}" "${repo_url}" "${clone_dir}" >> "${LOG_FILE}" 2>&1
-
-    ENTRY_CLONE_DIR["${entry_id}"]="${clone_dir}"
-}
-
-find_service_dir() {
-    local entry_id="$1"
-    local clone_dir="${ENTRY_CLONE_DIR[${entry_id}]}"
-    local configured_path="${ENTRY_PATH[${entry_id}]}"
-    local service_dir=""
-
-    if [ -n "${configured_path}" ]; then
-        service_dir="${clone_dir}/${configured_path}"
-        [ -d "${service_dir}" ] || fail "${entry_id}: Service path not found: ${service_dir}"
-    else
-        service_dir="$(find "${clone_dir}" -path '*/horizon/service.definition.json' -print | head -n 1 | xargs -I{} dirname "$(dirname "{}")")"
-        [ -n "${service_dir}" ] || fail "${entry_id}: Could not auto-detect service directory"
-    fi
-
-    [ -f "${service_dir}/horizon/service.definition.json" ] || fail "${entry_id}: Missing horizon/service.definition.json in ${service_dir}"
-    ENTRY_SERVICE_DIR["${entry_id}"]="${service_dir}"
-    log_info "${entry_id}: Service directory resolved to ${service_dir}"
-}
-
-extract_json_field() {
-    local file="$1"
-    local python_expr="$2"
-    python3 -c "import json; data=json.load(open('${file}')); ${python_expr}" 2>/dev/null
-}
-
-discover_service_metadata() {
-    local entry_id="$1"
-    local definition_file="${ENTRY_SERVICE_DIR[${entry_id}]}/horizon/service.definition.json"
-    local image service_name service_org service_arch service_key
-
-    image="$(extract_json_field "${definition_file}" "print(data.get('deployment',{}).get('services',{}).get(list(data.get('deployment',{}).get('services',{}).keys())[0],{}).get('image',''))")"
-    service_name="$(extract_json_field "${definition_file}" "print(data.get('label','') or data.get('name',''))")"
-    service_org="$(extract_json_field "${definition_file}" "print(data.get('org',''))")"
-    service_arch="$(extract_json_field "${definition_file}" "print(data.get('arch',''))")"
-
-    [ -n "${image}" ] || fail "${entry_id}: Unable to determine image name from service definition"
-    [ -n "${service_name}" ] || service_name="$(basename "${ENTRY_SERVICE_DIR[${entry_id}]}")"
-    [ -n "${service_org}" ] || service_org="${HZN_ORG_ID_VALUE}"
-    [ -n "${service_arch}" ] || service_arch="${ENTRY_ARCH[${entry_id}]%%,*}"
-
-    service_key="${service_org}/${service_name}:${service_arch}"
-
-    ENTRY_IMAGE["${entry_id}"]="${image}"
-    ENTRY_SERVICE_KEY["${entry_id}"]="${service_key}"
-    SERVICE_TO_ENTRY["${service_key}"]="${entry_id}"
-    DEPENDS_ON["${entry_id}"]=""
-    IN_DEGREE["${entry_id}"]=0
-
-    log_info "${entry_id}: Service key=${service_key} image=${image}"
-}
-
-resolve_dependencies() {
-    local entry_id definition_file deps raw_dep normalized dep_entry
-
-    for entry_id in "${ENTRY_IDS[@]}"; do
-        definition_file="${ENTRY_SERVICE_DIR[${entry_id}]}/horizon/service.definition.json"
-        raw_dep="$(python3 - <<PY
-import json
-with open("${definition_file}", "r", encoding="utf-8") as f:
-    data = json.load(f)
-required = data.get("requiredServices", [])
-for item in required:
-    if isinstance(item, dict):
-        org = item.get("org", "")
-        url = item.get("url", "")
-        version = item.get("versionRange", "")
-        arch = item.get("arch", "")
-        print(f"{org}|{url}|{version}|{arch}")
-PY
-)"
-        while IFS= read -r deps; do
-            [ -n "${deps}" ] || continue
-            IFS='|' read -r dep_org dep_url dep_version dep_arch <<< "${deps}"
-            dep_arch="${dep_arch:-${ENTRY_ARCH[${entry_id}]%%,*}}"
-            normalized="${dep_org}/${dep_url}:${dep_arch}"
-            dep_entry="${SERVICE_TO_ENTRY[${normalized}]:-}"
-
-            if [ -n "${dep_entry}" ]; then
-                DEPENDS_ON["${entry_id}"]="${DEPENDS_ON[${entry_id}]} ${dep_entry}"
-                ADJACENCY["${dep_entry}"]="${ADJACENCY[${dep_entry}]} ${entry_id}"
-                IN_DEGREE["${entry_id}"]=$(( ${IN_DEGREE[${entry_id}]} + 1 ))
-                log_info "${entry_id}: depends on ${dep_entry} (${normalized})"
-            else
-                log_info "${entry_id}: dependency ${normalized} not managed by blessed samples; assuming external"
-            fi
-        done <<< "${raw_dep}"
+    # Validate architecture (comma-separated allowed)
+    local IFS_SAVED="$IFS"
+    IFS=','
+    local arch_valid=true
+    for a in $arch; do
+      case "$a" in
+        amd64|arm64|arm|ppc64le) ;;
+        *)
+          echo "ERROR: Invalid architecture '${a}' at line ${line_num}: ${line}" >&2
+          arch_valid=false
+          ;;
+      esac
     done
+    IFS="$IFS_SAVED"
+    $arch_valid || continue
+
+    echo "${repo}|${branch}|${svc_path}|${arch}"
+  done < "$file"
+}
+
+# ---------------------------------------------------------------------------
+# 5. Repository cloning
+# ---------------------------------------------------------------------------
+clone_repo() {
+  local repo_url="$1"
+  local branch="$2"
+  local repo_name
+  repo_name=$(basename "$repo_url" .git)
+  local clone_dir="${WORK_DIR}/${repo_name}"
+
+  mkdir -p "$WORK_DIR"
+
+  # Remove existing clone
+  [ -d "$clone_dir" ] && rm -rf "$clone_dir"
+
+  echo "==> Cloning ${repo_url} (branch: ${branch})..."
+  if git clone --depth 1 --branch "$branch" "$repo_url" "$clone_dir" 2>&1; then
+    echo "$clone_dir"
+    return 0
+  fi
+
+  # Shallow clone failed (e.g., server doesn't support it) – try full clone
+  echo "WARNING: Shallow clone failed; retrying full clone..."
+  if git clone --branch "$branch" "$repo_url" "$clone_dir" 2>&1; then
+    echo "$clone_dir"
+    return 0
+  fi
+
+  echo "ERROR: Failed to clone ${repo_url} (branch: ${branch})" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# 6. Service path resolution
+# ---------------------------------------------------------------------------
+resolve_service_path() {
+  local clone_dir="$1"
+  local svc_path="$2"
+  local resolved
+
+  if [ -n "$svc_path" ]; then
+    resolved="${clone_dir}/${svc_path}"
+  else
+    resolved="$clone_dir"
+  fi
+
+  if [ ! -f "${resolved}/horizon/service.definition.json" ]; then
+    echo "ERROR: No horizon/service.definition.json found at ${resolved}/horizon/" >&2
+    return 1
+  fi
+
+  echo "$resolved"
+}
+
+# ---------------------------------------------------------------------------
+# 7. Dependency resolution (Kahn's topological sort)
+#    Input: associative arrays populated by build_dep_graph
+#    Output: ordered list of indices into ENTRIES array
+# ---------------------------------------------------------------------------
+
+# Global arrays for dependency graph
+declare -a ENTRIES=()          # "repo|branch|path|arch" entries in file order
+declare -a ENTRY_KEYS=()       # service spec key (org/service/version) per entry index
+declare -A IN_DEGREE=()        # in_degree[idx] = count of unresolved deps
+declare -A ADJ_LIST=()         # adj_list[dep_idx] = space-separated dependents
+
+extract_service_key() {
+  local svc_dir="$1"
+  local def="${svc_dir}/horizon/service.definition.json"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '(.org // "unknown") + "/" + .url + "/" + .version' "$def" 2>/dev/null || echo "unknown"
+  else
+    # Fallback: grep for url field
+    local url
+    url=$(grep '"url"' "$def" | head -1 | sed 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+    echo "${url:-unknown}"
+  fi
+}
+
+extract_required_services() {
+  local svc_dir="$1"
+  local def="${svc_dir}/horizon/service.definition.json"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.requiredServices[]?.url // empty' "$def" 2>/dev/null || true
+  else
+    grep '"url"' "$def" | tail -n +2 | sed 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true
+  fi
 }
 
 topological_sort() {
-    local -a queue=()
-    local -a resolved=()
-    local entry_id current neighbor
+  # Returns space-separated indices in build order
+  local -a queue=()
+  local -a sorted=()
+  local idx
 
-    if [ "${MANUAL_ORDER_OVERRIDE}" = "1" ]; then
-        BUILD_ORDER=("${ENTRY_IDS[@]}")
-        log_info "Manual ordering override enabled; using file order"
-        return 0
+  # Initialize queue with zero-in-degree nodes
+  for idx in "${!ENTRIES[@]}"; do
+    if [ "${IN_DEGREE[$idx]:-0}" -eq 0 ]; then
+      queue+=("$idx")
     fi
+  done
 
-    for entry_id in "${ENTRY_IDS[@]}"; do
-        if [ "${IN_DEGREE[${entry_id}]}" -eq 0 ]; then
-            queue+=("${entry_id}")
-        fi
+  while [ "${#queue[@]}" -gt 0 ]; do
+    local current="${queue[0]}"
+    queue=("${queue[@]:1}")
+    sorted+=("$current")
+
+    # Reduce in-degree for dependents
+    local dependents="${ADJ_LIST[$current]:-}"
+    for dep in $dependents; do
+      IN_DEGREE[$dep]=$(( ${IN_DEGREE[$dep]:-1} - 1 ))
+      if [ "${IN_DEGREE[$dep]}" -eq 0 ]; then
+        queue+=("$dep")
+      fi
     done
+  done
 
-    while [ ${#queue[@]} -gt 0 ]; do
-        current="${queue[0]}"
-        queue=("${queue[@]:1}")
-        resolved+=("${current}")
+  if [ "${#sorted[@]}" -ne "${#ENTRIES[@]}" ]; then
+    echo "ERROR: Circular dependency detected among blessed services" >&2
+    return 1
+  fi
 
-        for neighbor in ${ADJACENCY[${current}]:-}; do
-            IN_DEGREE["${neighbor}"]=$(( ${IN_DEGREE[${neighbor}]} - 1 ))
-            if [ "${IN_DEGREE[${neighbor}]}" -eq 0 ]; then
-                queue+=("${neighbor}")
-            fi
-        done
-    done
-
-    if [ ${#resolved[@]} -ne ${#ENTRY_IDS[@]} ]; then
-        fail "Circular dependency detected while resolving blessed sample services"
-    fi
-
-    BUILD_ORDER=("${resolved[@]}")
-    log_info "Resolved build order: ${BUILD_ORDER[*]}"
+  echo "${sorted[@]}"
 }
 
-tag_image_for_registry() {
-    local source_image="$1"
-    local image_name="${source_image##*/}"
-    printf '%s/%s' "${REGISTRY_URL}" "${image_name}"
+# ---------------------------------------------------------------------------
+# 8. Service building
+# ---------------------------------------------------------------------------
+QEMU_SETUP_DONE=false
+
+setup_qemu_emulation() {
+  if [ "$QEMU_SETUP_DONE" = "false" ]; then
+    echo "==> Setting up QEMU multi-arch emulation..."
+    docker run --privileged --rm tonistiigi/binfmt --install all 2>&1 || true
+    QEMU_SETUP_DONE=true
+  fi
 }
 
 build_service() {
-    local entry_id="$1"
-    local service_dir="${ENTRY_SERVICE_DIR[${entry_id}]}"
-    local arch="${ENTRY_ARCH[${entry_id}]}"
+  local svc_dir="$1"
+  local runtime="$2"
+  local arch="$3"
 
-    log_info "${entry_id}: Building service in ${service_dir} for arch=${arch}"
-    (
-        cd "${service_dir}"
-        if [ ! -f "Makefile" ]; then
-            fail "${entry_id}: No Makefile found in ${service_dir}"
-        fi
+  echo "==> Building service in ${svc_dir} (runtime: ${runtime}, arch: ${arch})..."
 
-        if [ "${CONTAINER_RUNTIME}" = "docker" ] && [[ "${arch}" == *,* ]]; then
-            make build BUILD_ARCH="${arch}" CONTAINER_RUNTIME="${CONTAINER_RUNTIME}"
-        else
-            make build CONTAINER_RUNTIME="${CONTAINER_RUNTIME}" ARCH="${arch}"
-        fi
-    ) >> "${LOG_FILE}" 2>&1
+  if [ ! -f "${svc_dir}/Makefile" ]; then
+    echo "ERROR: No Makefile found in ${svc_dir}" >&2
+    return 1
+  fi
+
+  # Determine if we need multi-arch build
+  local need_multiarch=false
+  local IFS_SAVED="$IFS"
+  IFS=','
+  local arch_list=($arch)
+  IFS="$IFS_SAVED"
+
+  for a in "${arch_list[@]}"; do
+    if [ "$a" != "amd64" ]; then
+      need_multiarch=true
+      break
+    fi
+  done
+
+  if [ "$need_multiarch" = "true" ]; then
+    # Build platform string (e.g., linux/amd64,linux/arm64)
+    local platforms=""
+    for a in "${arch_list[@]}"; do
+      platforms="${platforms},linux/${a}"
+    done
+    platforms="${platforms#,}"  # strip leading comma
+
+    if [ "$runtime" = "docker" ]; then
+      setup_qemu_emulation
+      (cd "$svc_dir" && docker buildx build --platform "$platforms" . 2>&1) || return 1
+    elif [ "$runtime" = "podman" ]; then
+      setup_qemu_emulation
+      (cd "$svc_dir" && podman build --platform "$platforms" . 2>&1) || return 1
+    fi
+  else
+    # Standard single-arch build via Makefile
+    (cd "$svc_dir" && make build 2>&1) || return 1
+  fi
+
+  return 0
 }
 
-push_images() {
-    local entry_id="$1"
-    local source_image="${ENTRY_IMAGE[${entry_id}]}"
-    local target_image
-
-    target_image="$(tag_image_for_registry "${source_image}")"
-    log_info "${entry_id}: Tagging image ${source_image} as ${target_image}"
-    "${CONTAINER_RUNTIME}" tag "${source_image}" "${target_image}" >> "${LOG_FILE}" 2>&1
-    log_info "${entry_id}: Pushing ${target_image}"
-    "${CONTAINER_PUSH_CMD}" push "${target_image}" >> "${LOG_FILE}" 2>&1
+# ---------------------------------------------------------------------------
+# 9. Image extraction, tagging, and registry push
+# ---------------------------------------------------------------------------
+extract_image_name() {
+  local svc_dir="$1"
+  local def="${svc_dir}/horizon/service.definition.json"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.deployment.services | to_entries[0].value.image // empty' "$def" 2>/dev/null \
+      || jq -r '.deployment | if type == "string" then . else empty end' "$def" 2>/dev/null \
+      || echo ""
+  else
+    grep '"image"' "$def" | head -1 | sed 's/.*"image"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo ""
+  fi
 }
 
+push_to_registry() {
+  local svc_dir="$1"
+  local runtime="$2"
+  local image_name="$3"
+
+  if [ -z "$image_name" ]; then
+    echo "WARNING: Could not determine image name; skipping registry push"
+    return 0
+  fi
+
+  local registry_tag="${REGISTRY_URL}/${image_name##*/}"
+  echo "==> Tagging ${image_name} → ${registry_tag}..."
+  "${runtime}" tag "$image_name" "$registry_tag" 2>&1 || {
+    echo "WARNING: Failed to tag image ${image_name}; skipping push"
+    return 0
+  }
+
+  echo "==> Pushing ${registry_tag} to local registry..."
+  "${runtime}" push "$registry_tag" 2>&1 || {
+    echo "WARNING: Failed to push ${registry_tag}; continuing (registry push is best-effort)"
+    return 0
+  }
+
+  echo "✓ Image pushed to ${registry_tag}"
+
+  # If USE_LOCAL_REGISTRY=true, rewrite image name in service definition
+  if [ "${USE_LOCAL_REGISTRY}" = "true" ] && command -v jq >/dev/null 2>&1; then
+    local def="${svc_dir}/horizon/service.definition.json"
+    local tmp="${def}.tmp"
+    jq --arg new_img "$registry_tag" \
+      'walk(if type == "object" and has("image") then .image = $new_img else . end)' \
+      "$def" > "$tmp" && mv "$tmp" "$def"
+    echo "✓ Rewrote image name in service.definition.json to ${registry_tag}"
+  fi
+
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# 10. Service publishing
+# ---------------------------------------------------------------------------
 publish_service() {
-    local entry_id="$1"
-    local service_dir="${ENTRY_SERVICE_DIR[${entry_id}]}"
-    local definition_file="${service_dir}/horizon/service.definition.json"
+  local svc_dir="$1"
 
-    log_info "${entry_id}: Publishing service definition to exchange"
-    (
-        export HZN_ORG_ID="${HZN_ORG_ID_VALUE}"
-        export HZN_EXCHANGE_USER_AUTH="${HZN_EXCHANGE_USER_AUTH_VALUE}"
-        cd "${service_dir}"
-        if [ -f "Makefile" ]; then
-            make publish >> "${LOG_FILE}" 2>&1 || hzn exchange service publish -f "${definition_file}" >> "${LOG_FILE}" 2>&1
-        else
-            hzn exchange service publish -f "${definition_file}" >> "${LOG_FILE}" 2>&1
-        fi
-        hzn exchange service list | grep -F "${ENTRY_SERVICE_KEY[${entry_id}]%%:*}" >> "${LOG_FILE}" 2>&1
-    )
+  echo "==> Publishing service from ${svc_dir}..."
+
+  # Source credentials
+  local creds_file="$BLESSED_SAMPLES_CREDENTIALS"
+  if [ -f "$creds_file" ]; then
+    # shellcheck disable=SC1090
+    set +u
+    source "$creds_file"
+    set -u
+  else
+    echo "WARNING: Credentials file '${creds_file}' not found; using existing environment"
+  fi
+
+  # Export OH_EXAMPLES_REPO for make targets (preserves Issue #21 behavior)
+  export OH_EXAMPLES_REPO
+
+  if (cd "$svc_dir" && make --dry-run publish >/dev/null 2>&1); then
+    (cd "$svc_dir" && make publish 2>&1) || return 1
+  else
+    (cd "$svc_dir" && hzn exchange service publish -f horizon/service.definition.json 2>&1) || return 1
+  fi
+
+  echo "✓ Service published successfully"
+  return 0
 }
 
-record_summary() {
-    local entry_id="$1"
-    local status="$2"
-    local message="$3"
-    local line
-    line="$(timestamp) | ${entry_id} | ${status} | ${message}"
-    SUMMARY_LINES+=("${line}")
-    echo "${line}" >> "${SUMMARY_FILE}"
-    ENTRY_STATUS["${entry_id}"]="${status}"
-    ENTRY_MESSAGE["${entry_id}"]="${message}"
-}
-
-prepare_entries() {
-    local entry_id
-
-    for entry_id in "${ENTRY_IDS[@]}"; do
-        clone_repo "${entry_id}"
-        find_service_dir "${entry_id}"
-        discover_service_metadata "${entry_id}"
+# ---------------------------------------------------------------------------
+# 11. Build summary
+# ---------------------------------------------------------------------------
+print_summary() {
+  echo ""
+  echo "=== Build Summary ==="
+  echo "Successful: ${SUCCESS_COUNT}"
+  echo "Failed:     ${FAILURE_COUNT}"
+  if [ "${#FAILED_SERVICES[@]}" -gt 0 ]; then
+    echo "Failed services:"
+    for svc in "${FAILED_SERVICES[@]}"; do
+      echo "  ✗ ${svc}"
     done
-
-    resolve_dependencies
-    topological_sort
+  fi
+  echo "=== Build Complete: $(date) ==="
 }
 
-run_pipeline() {
-    local entry_id
-    local failures=0
-
-    for entry_id in "${BUILD_ORDER[@]}"; do
-        log_info "=== Processing ${entry_id} (${ENTRY_REPO[${entry_id}]}) ==="
-
-        if build_service "${entry_id}" && push_images "${entry_id}" && publish_service "${entry_id}"; then
-            record_summary "${entry_id}" "success" "Built, pushed, and published ${ENTRY_SERVICE_KEY[${entry_id}]}"
-            log_info "${entry_id}: Success"
-        else
-            failures=$((failures + 1))
-            record_summary "${entry_id}" "failed" "Pipeline failed for ${ENTRY_SERVICE_KEY[${entry_id}]}"
-            log_error "${entry_id}: Failed"
-
-            if [ "${FAIL_FAST}" = "1" ]; then
-                fail "Stopping after first failure because FAIL_FAST=1"
-            fi
-        fi
-    done
-
-    log "=========================================="
-    log "Blessed Samples Summary"
-    log "=========================================="
-    printf '%s\n' "${SUMMARY_LINES[@]}" | tee -a "${LOG_FILE}"
-
-    [ "${failures}" -eq 0 ] || exit 1
-}
-
+# ---------------------------------------------------------------------------
+# 12. Main execution
+# ---------------------------------------------------------------------------
 main() {
-    init_log
-    check_config_file
-    parse_config
-    detect_container_runtime
-    load_credentials
-    prepare_entries
-    run_pipeline
+  init_logging
+  check_config_file
+
+  local runtime
+  runtime=$(detect_container_runtime)
+  echo "==> Using container runtime: ${runtime}"
+
+  mkdir -p "$WORK_DIR"
+
+  # ---- Phase A: Parse all entries from config file ----
+  local raw_entries=()
+  while IFS= read -r entry; do
+    raw_entries+=("$entry")
+  done < <(parse_config "$BLESSED_SAMPLES_FILE")
+
+  if [ "${#raw_entries[@]}" -eq 0 ]; then
+    echo "No valid entries found in ${BLESSED_SAMPLES_FILE}. Nothing to build."
+    print_summary
+    exit 0
+  fi
+
+  # ---- Phase B: Clone all repos and map service directories ----
+  # We need service dirs to build the dependency graph
+  declare -a svc_dirs=()
+  declare -a valid_entries=()
+
+  for entry in "${raw_entries[@]}"; do
+    IFS='|' read -r repo branch svc_path arch <<< "$entry"
+
+    local clone_dir
+    if clone_dir=$(clone_repo "$repo" "$branch"); then
+      local resolved_dir
+      if resolved_dir=$(resolve_service_path "$clone_dir" "$svc_path"); then
+        svc_dirs+=("$resolved_dir")
+        valid_entries+=("$entry")
+        ENTRIES+=("$entry")
+        ENTRY_KEYS+=($(extract_service_key "$resolved_dir"))
+        IN_DEGREE[${#ENTRIES[@]}-1]=0
+      else
+        echo "✗ Skipping (no service definition): ${repo}/${svc_path}"
+        ((FAILURE_COUNT++)) || true
+        FAILED_SERVICES+=("${repo}/${svc_path}")
+      fi
+    else
+      echo "✗ Skipping (clone failed): ${repo}"
+      ((FAILURE_COUNT++)) || true
+      FAILED_SERVICES+=("$repo")
+    fi
+  done
+
+  # ---- Phase C: Build dependency graph ----
+  local num_entries="${#ENTRIES[@]}"
+  for ((i=0; i<num_entries; i++)); do
+    local key="${ENTRY_KEYS[$i]}"
+    local req_svcs
+    req_svcs=$(extract_required_services "${svc_dirs[$i]}")
+    for req in $req_svcs; do
+      # Find the index of this required service
+      for ((j=0; j<num_entries; j++)); do
+        if echo "${ENTRY_KEYS[$j]}" | grep -q "$req"; then
+          # j must be built before i
+          ADJ_LIST[$j]="${ADJ_LIST[$j]:-} $i"
+          IN_DEGREE[$i]=$(( ${IN_DEGREE[$i]:-0} + 1 ))
+          break
+        fi
+      done
+    done
+  done
+
+  # ---- Phase D: Topological sort ----
+  local sorted_indices
+  if ! sorted_indices=$(topological_sort); then
+    echo "ERROR: Dependency resolution failed. Aborting."
+    print_summary
+    exit 1
+  fi
+
+  # ---- Phase E: Build, tag, push, publish in sorted order ----
+  for idx in $sorted_indices; do
+    local entry="${ENTRIES[$idx]}"
+    local svc_dir="${svc_dirs[$idx]}"
+    IFS='|' read -r repo branch svc_path arch <<< "$entry"
+    local label="${repo##*/}/${svc_path:-root}"
+
+    echo ""
+    echo "=== Processing: ${label} (arch: ${arch}) ==="
+
+    local service_ok=true
+
+    # Build
+    if ! build_service "$svc_dir" "$runtime" "$arch"; then
+      echo "✗ Build failed: ${label}"
+      ((FAILURE_COUNT++)) || true
+      FAILED_SERVICES+=("$label")
+      if [ "$FAIL_FAST" = "true" ]; then
+        echo "FAIL_FAST=true; aborting."
+        print_summary
+        exit 1
+      fi
+      service_ok=false
+    fi
+
+    if [ "$service_ok" = "true" ]; then
+      # Extract image name and push to registry
+      local image_name
+      image_name=$(extract_image_name "$svc_dir")
+      push_to_registry "$svc_dir" "$runtime" "$image_name"
+
+      # Publish to Exchange
+      if publish_service "$svc_dir"; then
+        echo "✓ Success: ${label}"
+        ((SUCCESS_COUNT++)) || true
+      else
+        echo "✗ Publish failed: ${label}"
+        ((FAILURE_COUNT++)) || true
+        FAILED_SERVICES+=("$label")
+        if [ "$FAIL_FAST" = "true" ]; then
+          echo "FAIL_FAST=true; aborting."
+          print_summary
+          exit 1
+        fi
+      fi
+    fi
+  done
+
+  print_summary
+
+  if [ "$FAILURE_COUNT" -gt 0 ]; then
+    exit 1
+  fi
 }
 
-main "$@"
+# Only run main when executed directly (not when sourced for unit testing)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

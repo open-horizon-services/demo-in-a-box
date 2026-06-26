@@ -1,6 +1,9 @@
 # The Open Horizon organization ID namespace where you will be publishing files
 export HZN_ORG_ID ?= myorg
 
+# Blessed Samples configuration
+export EXPOSE_REGISTRY_PORT ?= false
+
 VMNAME :=
 
 # Which system configuration to be provisioned
@@ -344,10 +347,87 @@ add-box: add-boxes
 remove-box: remove-boxes
 rebuild-box: rebuild-boxes
 
+# ---------------------------------------------------------------------------
+# Blessed Samples targets
+# ---------------------------------------------------------------------------
+
+# Manually trigger the blessed samples build pipeline on the hub VM
+build-blessed-samples:
+	@if VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant status 2>/dev/null | grep -q running; then \
+		VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant ssh -c \
+			"chmod +x /vagrant/scripts/build-blessed-samples.sh && \
+			 BLESSED_SAMPLES_FILE=/vagrant/blessedSamples.txt \
+			 HUB_IP=$(HUB_IP) \
+			 REGISTRY_URL=$(HUB_IP):5000 \
+			 BLESSED_SAMPLES_CREDENTIALS=/vagrant/mycreds.env \
+			 /vagrant/scripts/build-blessed-samples.sh /vagrant/blessedSamples.txt"; \
+	else \
+		echo "ERROR: Hub VM is not running. Run 'make up-hub' first."; \
+		exit 1; \
+	fi
+
+# List services configured in blessedSamples.txt (host-side, no SSH needed)
+list-blessed-samples:
+	@if [ -f blessedSamples.txt ]; then \
+		echo "Services in blessedSamples.txt:"; \
+		grep -v '^#' blessedSamples.txt | grep -v '^[[:space:]]*$$' || echo "(no entries)"; \
+	else \
+		echo "blessedSamples.txt not found. Create one to enable blessed samples."; \
+	fi
+
+# Check whether the local container registry on the hub VM is running
+registry-status:
+	@if VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant status 2>/dev/null | grep -q running; then \
+		VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant ssh -c \
+			"docker ps --filter name=registry --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"; \
+	else \
+		echo "Hub VM is not running."; \
+	fi
+
+# List images in the local registry catalog
+registry-catalog:
+	@if VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant status 2>/dev/null | grep -q running; then \
+		VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant ssh -c \
+			"curl -s http://$(HUB_IP):5000/v2/_catalog | python3 -m json.tool 2>/dev/null || curl -s http://$(HUB_IP):5000/v2/_catalog"; \
+	else \
+		echo "Hub VM is not running."; \
+	fi
+
+# Print the latest blessed samples build log (host-visible copy)
+blessed-samples-logs:
+	@if [ -f blessed-samples-build-latest.log ]; then \
+		cat blessed-samples-build-latest.log; \
+	else \
+		echo "No log found. Run 'make build-blessed-samples' first."; \
+	fi
+
+# Clean blessed samples assets from hub VM (cloned repos, logs, optionally Exchange services)
+# Set DRY_RUN=true to preview what would be deleted without actually deleting.
+clean-blessed-samples:
+	@echo "Cleaning blessed samples assets..."
+	@if VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant status 2>/dev/null | grep -q running; then \
+		if [ "$(DRY_RUN)" = "true" ]; then \
+			echo "[DRY RUN] Would remove /tmp/blessed-samples/"; \
+			echo "[DRY RUN] Would remove /var/log/blessed-samples-build-*.log"; \
+			echo "[DRY RUN] Would remove local registry images (if any)"; \
+		else \
+			VAGRANT_VAGRANTFILE=$(VAGRANT_HUB) vagrant ssh -c \
+				"rm -rf /tmp/blessed-samples/ && \
+				 rm -f /var/log/blessed-samples-build-*.log && \
+				 echo '✓ Cloned repos and logs removed'"; \
+		fi; \
+	else \
+		echo "Hub VM is not running; skipping VM-side cleanup."; \
+	fi
+	@if [ -f blessed-samples-build-latest.log ]; then rm -f blessed-samples-build-latest.log; echo "✓ Local log removed"; fi
+	@echo "✓ Blessed samples cleanup complete"
+
 .PHONY: default check init up-hub up status down destroy browse connect clean \
         connect-hub status-hub destroy-hub \
         build-box build-boxes build-hub-box build-agent-box \
         add-box add-boxes add-hub-box add-agent-box \
         remove-box remove-boxes remove-hub-box remove-agent-box \
         clean-box rebuild-box rebuild-boxes \
-        build-ubuntu-22 build-ubuntu-24 build-fedora-41
+        build-ubuntu-22 build-ubuntu-24 build-fedora-41 \
+        build-blessed-samples list-blessed-samples registry-status registry-catalog \
+        blessed-samples-logs clean-blessed-samples

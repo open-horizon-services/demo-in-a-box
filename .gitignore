@@ -23,3 +23,7 @@ example.txt
 box-metadata.json
 packer_output/
 packer_cache/
+
+.specify/
+.bob/
+openspec/
