@@ -7,28 +7,28 @@ This is a set of materials designed to allow anyone to create a portable set of 
 ### Required (All Installation Methods)
 
 * `make`
-* `vagrant`
-* `virtualbox`
-* `erb` (Ruby's ERB template processor)
-
-### Optional (For Custom Box - Recommended)
-
-* `packer` - For building optimized base box (see Installation section)
+* [`multipass`](https://multipass.run) ≥ 1.13 — lightweight VM manager (replaces Vagrant + VirtualBox)
+* `jq` — JSON processor used for hub IP discovery
+  - macOS: `brew install jq`
+  - Linux: `sudo apt-get install jq` or `sudo snap install jq`
 
 ### System Requirements
 
-* **Architecture:** `x86_64`
-* **OS:** Debian-based (Ubuntu recommended)
-* **RAM:** 8GB minimum (16GB recommended for car/semi configurations)
-* **Disk:** 20GB minimum (80GB for semi with standard boxes, 30GB with custom box)
+* **Architecture:** `x86_64` or `arm64` (Apple Silicon supported)
+* **OS:** macOS, Linux, or Windows (WSL2)
+* **RAM:** 8 GB minimum (16 GB recommended for car/semi configurations)
+* **Disk:** 20 GB minimum free
+* **Multipass:** Install from [https://multipass.run](https://multipass.run)
+
+> **Migrating from the Vagrant/VirtualBox branch?** See the [Migration Guide](#migration-from-vagrant--virtualbox) below.
 
 ## System Configurations
 
-The `x86_64` architecture host can be configured one of four ways:
+The host can be configured in one of four ways:
 
 ### Unicycle Configuration
 
-Two VMs, with the primary running the Exchange and an Agent using 1/2 of the available resources, and the remaining VM running an Agent also using 1/2 of the available resources.
+Two VMs — one hub (4 GB RAM, Exchange/CSS/AgBot/FDO/MongoDB) and one agent VM (2 GB RAM, HelloWorld workload).
 
 ```mermaid
 graph TD
@@ -63,13 +63,13 @@ graph TD
     
     end
     
-    IP1["Hub VM IP: 192.168.56.10"] --> Exchange
-    IP2["Agent VM IP: 192.168.56.20"] --> Agent1
+    IP1["Hub VM (dynamic IP, discovered at runtime)"] --> Exchange
+    IP2["Agent VM (dynamic IP)"] --> Agent1
 ```
 
 ### Bicycle Configuration
 
-Three VMs, with the primary running the Exchange and an Agent using 1/2 of the available resources, and the remaining two running Agents each using 1/4 of the available resources.
+Three VMs — one hub and two agent VMs.
 
 ```mermaid
 graph TD
@@ -110,14 +110,14 @@ graph TD
     
     end
     
-    IP1["Hub VM IP: 192.168.56.10"] --> Exchange
-    IP2["Agent VM 1 IP: 192.168.56.20"] --> Agent1
-    IP3["Agent VM 2 IP: 192.168.56.30"] --> Agent2
+    IP1["Hub VM (dynamic IP)"] --> Exchange
+    IP2["Agent VM 1 (dynamic IP)"] --> Agent1
+    IP3["Agent VM 2 (dynamic IP)"] --> Agent2
 ```
 
 ### Car Configuration
 
-Five VMs (recommended for the 16GB RAM configuration only), with the primary running the Exchange and an Agent using 1/4 of the available resources, and the remaining four running Agents each using 1/8 of the available resources.
+Five VMs (requires 16 GB host RAM).
 
 ```mermaid
 graph TD
@@ -169,30 +169,24 @@ graph TD
     class Agent1,HelloWorld1,Agent2,HelloWorld2,Agent3,HelloWorld3,Agent4,HelloWorld4 agent
     
     end
-    
-    IP1["Hub VM IP: 192.168.56.10"] --> Exchange
-    IP2["Agent VM 1 IP: 192.168.56.20"] --> Agent1
-    IP3["Agent VM 2 IP: 192.168.56.30"] --> Agent2
-    IP4["Agent VM 3 IP: 192.168.56.40"] --> Agent3
-    IP5["Agent VM 4 IP: 192.168.56.50"] --> Agent4
 ```
 
 ### Semi Configuration
 
-Seven VMs (recommended for the 16GB RAM configuration only), with the primary running the Exchange and an Agent using 1/4 of the available resources, and the remaining six running Agents each using 1/8 of the available resources.
+Seven VMs (requires 16 GB host RAM).
 
 ```mermaid
 graph LR
     subgraph "Semi Configuration"
     
-    Hub["Hub VM\n192.168.56.10\n4GB RAM\nExchange + Agent"]
+    Hub["Hub VM\n(dynamic IP)\n4GB RAM\nExchange + Agent"]
     
-    Agent1["Agent VM 1\n192.168.56.20\n2GB RAM"]
-    Agent2["Agent VM 2\n192.168.56.30\n2GB RAM"]
-    Agent3["Agent VM 3\n192.168.56.40\n2GB RAM"]
-    Agent4["Agent VM 4\n192.168.56.50\n2GB RAM"]
-    Agent5["Agent VM 5\n192.168.56.60\n2GB RAM"]
-    Agent6["Agent VM 6\n192.168.56.70\n2GB RAM"]
+    Agent1["Agent VM 1\n2GB RAM"]
+    Agent2["Agent VM 2\n2GB RAM"]
+    Agent3["Agent VM 3\n2GB RAM"]
+    Agent4["Agent VM 4\n2GB RAM"]
+    Agent5["Agent VM 5\n2GB RAM"]
+    Agent6["Agent VM 6\n2GB RAM"]
     
     Hub --- Agent1
     Hub --- Agent2
@@ -211,7 +205,7 @@ graph LR
 
 ### Network Configuration
 
-The following diagram shows how the VMs are connected in the network:
+VMs communicate over the Multipass bridge network. IPs are dynamically assigned by Multipass and stored in `mycreds.env` after `make up-hub`.
 
 ```mermaid
 graph TD
@@ -219,11 +213,11 @@ graph TD
     
     Host["Host Machine"]
     
-    subgraph "VirtualBox Network"
-    Hub["Hub VM\n192.168.56.10"]
-    Agent1["Agent VM 1\n192.168.56.20"]
-    Agent2["Agent VM 2\n192.168.56.30"]
-    AgentN["Agent VM N\n192.168.56.X0"]
+    subgraph "Multipass Bridge Network"
+    Hub["Hub VM\n(dynamic IP, stored in mycreds.env)"]
+    Agent1["Agent VM 1\n(dynamic IP)"]
+    Agent2["Agent VM 2\n(dynamic IP)"]
+    AgentN["Agent VM N\n(dynamic IP)"]
     end
     
     Host --- Hub
@@ -273,7 +267,7 @@ https://github.com/open-horizon-services/web-helloworld-python.git
 https://github.com/open-horizon/examples.git master edge/services/helloworld
 ```
 
-Services are cloned, built, pushed to a local container registry at `192.168.56.10:5000`, and published to the Exchange during `make up-hub`. A build summary is saved to `blessed-samples-build-latest.log`.
+Services are cloned, built, pushed to a local container registry on the hub VM at port 5000, and published to the Exchange during `make up-hub`. A build summary is saved to `blessed-samples-build-latest.log`.
 
 See [BLESSED_SAMPLES.md](BLESSED_SAMPLES.md) for full documentation, format reference, environment variables, and troubleshooting.
 
@@ -281,165 +275,48 @@ See [BLESSED_SAMPLES.md](BLESSED_SAMPLES.md) for full documentation, format refe
 
 Clone the repository, then `cd` into the repo folder.
 
-### Operating System Selection
-
-**Default:** Ubuntu 22.04 LTS
-
-**Supported Operating Systems:**
-- `ubuntu-22` - Ubuntu 22.04 LTS (Jammy Jellyfish) - Default
-- `ubuntu-24` - Ubuntu 24.04 LTS (Noble Numbat)
-- `fedora-41` - Fedora 41
-
-#### Same OS for All VMs
-
-To use a different OS for all VMs:
+### Standard Installation
 
 ```bash
-# Ubuntu 24 for everything
-export HUB_OS_TYPE=ubuntu-24
-export AGENT_OS_TYPE=ubuntu-24
-make rebuild-boxes
-make init
-```
-
-#### Mixed OS Environments
-
-You can run different operating systems for hub and agents:
-
-```bash
-# Example 1: Ubuntu 22 hub + Fedora 41 agents
-export HUB_OS_TYPE=ubuntu-22
-export AGENT_OS_TYPE=fedora-41
-make rebuild-boxes
-make init
-
-# Example 2: Fedora 41 hub + Ubuntu 24 agents
-export HUB_OS_TYPE=fedora-41
-export AGENT_OS_TYPE=ubuntu-24
-make rebuild-boxes
-make init
-```
-
-See [MIXED_OS_GUIDE.md](MIXED_OS_GUIDE.md) for detailed mixed-OS documentation.
-
-### Standard Installation (Recommended)
-
-For optimized provisioning with faster VM creation and reduced bandwidth usage, first build the custom base box:
-
-1. **Install Packer** (if not already installed):
-   ```bash
-   # macOS
-   brew tap hashicorp/tap
-   brew install hashicorp/tap/packer
-   
-   # Linux (Ubuntu/Debian)
-   curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-   sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-   sudo apt-get update && sudo apt-get install packer
-   ```
-
-2. **Build and add custom box** (one-time, ~10-15 minutes):
-   ```bash
-   make rebuild-boxes
-   ```
-
-3. **Verify and provision**:
-   ```bash
-   make check
-   make init
-   ```
-
-**Benefits of custom box:**
-- ⏱️ 5-10 minutes faster per VM (packages pre-installed)
-- 📦 60% less disk usage (linked clones)
-- 🌐 Reduced network bandwidth during provisioning
-- ✅ More reliable (tested package versions)
-- 🔄 Support for multiple operating systems
-
-See [BUILD_BOX.md](BUILD_BOX.md) for detailed custom box documentation.
-
-### Quick Start (Without Custom Box)
-
-If you prefer to use the standard Ubuntu 22.04 base box without customization:
-
-```bash
-export HUB_BOX_NAME=ubuntu/jammy64
-export AGENT_BOX_NAME=ubuntu/jammy64
+# Verify prerequisites are installed
 make check
+
+# Provision hub VM (~20-40 minutes) and agent VM(s)
 make init
 ```
 
-For other standard boxes:
+`make init` runs `make up-hub` (launches hub, writes `mycreds.env`) then `make up` (launches agent VMs with cloud-init).
 
-```bash
-# Ubuntu 24.04
-export HUB_BOX_NAME=bento/ubuntu-24.04
-export AGENT_BOX_NAME=bento/ubuntu-24.04
-make init
-
-# Fedora 41
-export HUB_BOX_NAME=bento/fedora-41
-export AGENT_BOX_NAME=bento/fedora-41
-make init
-```
-
-Running `make init` will provision the default system configuration ("unicycle"). To use any other configuration, first `export SYSTEM_CONFIGURATION=<system configuration string>` where `<system configuration string>` is one of "unicycle", "bicycle", "car", or "semi" _without the quotes_. Installation time varies:
-- **With custom box:** 15-20 minutes (unicycle) to 30-40 minutes (semi)
-- **Without custom box:** 30 minutes (unicycle) to 60 minutes (semi)
+Installation time:
+- **unicycle:** 30–45 minutes (cloud-init installs packages on first run)
+- **semi:** 60–90 minutes
 
 ### Advanced Configuration
 
-The system can be further customized by setting the following environment variables:
-
-#### OS Configuration
-* `DEFAULT_OS_TYPE` - Default OS for all VMs (default: ubuntu-22)
-* `HUB_OS_TYPE` - OS for hub VM (default: ${DEFAULT_OS_TYPE})
-* `AGENT_OS_TYPE` - OS for agent VMs (default: ${DEFAULT_OS_TYPE})
-* `BOX_VERSION` - Version number for custom boxes (default: 1.0.0)
+Customize with environment variables before `make init`:
 
 #### Resource Configuration
-* `NUM_AGENTS` - Number of agent VMs to create (default: 1)
-* `MEMORY` - Memory allocation per agent VM in MB (default: 2048)
-* `DISK_SIZE` - Disk size per agent VM in GB (default: 20)
-
-#### Network Configuration
-* `NETWORK_PREFIX` - Network prefix for all VMs (default: 192.168.56)
-* `HUB_IP` - Hub VM IP address (default: ${NETWORK_PREFIX}.10)
-* `BASE_IP` - Starting IP final octet for agent VMs (default: 20)
-  - Agent IPs calculated as: ${NETWORK_PREFIX}.${BASE_IP + (agent_number-1)*10}
-  - Agent 1: ${NETWORK_PREFIX}.20, Agent 2: ${NETWORK_PREFIX}.30, etc.
+* `NUM_AGENTS` — Number of agent VMs (default: 1)
+* `MEMORY` — Memory per agent VM in MB (default: 2048)
+* `DISK_SIZE` — Disk per agent VM in GB (default: 20)
+* `MULTIPASS_IMAGE` — Ubuntu cloud image to use (default: `22.04`)
+* `SYSTEM_CONFIGURATION` — Shortcut: `unicycle` | `bicycle` | `car` | `semi`
 
 #### Custom Resource Example
 ```shell
-export SYSTEM_CONFIGURATION=custom
-export NUM_AGENTS=4
+export SYSTEM_CONFIGURATION=bicycle
 export MEMORY=4096
 export DISK_SIZE=40
 make init
 ```
 
-#### Custom Network Example
-```shell
-# Use different network to avoid conflicts
-export NETWORK_PREFIX=10.0.10
-export HUB_IP=10.0.10.5
-export BASE_IP=30
-make init
+If you only want the hub running in a VM (no separate agent VMs), just run `make up-hub` instead of `make init`.
 
-# Result:
-# Hub:    10.0.10.5
-# Agent1: 10.0.10.30
-# Agent2: 10.0.10.40
-# Agent3: 10.0.10.50
-```
-
-If you only want the hub running in a VM with an agent, and not a separate agent in a VM, just run `make up-hub` instead of `make init`, but make sure you copy over the credentials from the "mycreds.env" file on the host.
-
-Running `make down` will de-provision the system and cannot be undone. Make sure you really want to do this.
+Running `make down` will de-provision all VMs and delete temporary files. This cannot be undone.
 
 ## Agent Configuration Files
 
-After provisioning the hub VM, you can generate agent configuration files for connecting to the Open Horizon services from different network contexts:
+After provisioning the hub VM, generate agent configuration files for connecting to the Open Horizon services from different network contexts:
 
 ```bash
 make generate-agent-configs
@@ -449,9 +326,8 @@ This creates two configuration files:
 
 ### agent-install-external.env
 Contains service URLs using your **host machine's local network IP address**. Use this when:
-- Running an agent directly on your host machine (outside VirtualBox)
+- Running an agent directly on your host machine
 - Testing from the host where the VMs are running
-- The host needs to access hub services via port forwarding
 
 **Example:**
 ```bash
@@ -462,22 +338,19 @@ export HZN_FDO_SVC_URL=http://192.168.1.100:9008/api
 ```
 
 ### agent-install-internal.env
-Contains service URLs using the **hub VM's internal IP address** (192.168.56.10 by default). Use this when:
-- Running an agent inside a VirtualBox VM on the same host-only network
+Contains service URLs using the **hub VM's Multipass IP** (sourced from `mycreds.env`). Use this when:
+- Running an agent inside another VM on the same Multipass bridge
 - Connecting from agent VMs to the hub VM
-- Working within the VirtualBox network namespace
 
 **Example:**
 ```bash
-export HZN_EXCHANGE_URL=http://192.168.56.10:3090/v1
-export HZN_FSS_CSSURL=http://192.168.56.10:9443/
-export HZN_AGBOT_URL=http://192.168.56.10:3111
-export HZN_FDO_SVC_URL=http://192.168.56.10:9008/api
+export HZN_EXCHANGE_URL=http://192.168.64.10:3090/v1
+export HZN_FSS_CSSURL=http://192.168.64.10:9443/
+export HZN_AGBOT_URL=http://192.168.64.10:3111
+export HZN_FDO_SVC_URL=http://192.168.64.10:9008/api
 ```
 
 ### Using the Configuration Files
-
-To apply a configuration file before running Open Horizon commands:
 
 ```bash
 # Load external configuration (for host machine)
@@ -498,75 +371,119 @@ make check-host-ip
 # Regenerate external config only (if your host IP changed)
 make agent-config-external
 
-# Regenerate internal config only (if you changed HUB_IP)
+# Regenerate internal config only (if the hub IP changed)
 make agent-config-internal
 ```
 
-**Note:** The `agent-install-external.env` configuration requires proper port forwarding from the host to the hub VM. The default hub Vagrantfile includes port forwarding for all required services (ports 3090, 3111, 9008, 9443).
+**Note:** To expose hub service ports on `localhost`, use `make port-forward` after `make up-hub`. This is the replacement for the Vagrant `forwarded_port` behaviour.
 
 ## Usage
 
-Run `make connect` to SSH to the first agent VM in _unicycle_ configuration. For all other configurations, specify the "VMNAME" as an argument: `make connect VMNAME=agent3`. The credentials can be set by running `export $(cat agent-install.cfg)`. To test that the installation is configured and working, run the following commands:
+Run `make connect` to open a shell on the first agent VM. For other VMs, specify the VM name: `make connect VMNAME=agent3`.
+
+To test the installation:
 
 ```shell
 hzn version
 ```
 
-This should return matching version numbers for both the CLI and the agent.
+Should return matching version numbers for the CLI and agent.
 
 ```shell
 hzn node list
 ```
 
-This will show the agent is running and the HelloWorld sample workload is configured and running.
+Shows the agent running with the HelloWorld workload configured.
 
 ```shell
 hzn agreement list
 ```
 
-This will show active agreements between the agent and the AgBot, confirming workload deployment.
+Shows active agreements between the agent and AgBot.
 
 ```shell
 hzn ex user ls
 ```
 
-This will confirm that the CLI can connect to the exchange in the hub's VM, and that the credentials are valid.
+Confirms CLI connectivity to the Exchange.
 
 ```shell
 hzn ex node ls
 ```
 
-This will show all of the agents registered with the exchange in the hub VM.
+Shows all agents registered with the Exchange.
 
 ```shell
 exit
 ```
 
-Will disconnect from the agent VM and end the SSH session.
+Disconnects from the VM shell.
 
 ```shell
 make down
 ```
 
-Will remove all of the VMs and delete temporary files.
+Destroys all VMs and removes generated files.
 
-## Advanced details
-
-The system uses a single ERB template (`configuration/Vagrantfile.template.erb`) to generate the Vagrant configuration for all agent VMs. The template supports dynamic configuration through environment variables and maintains consistent IP addressing and resource allocation across all VMs.
+## Advanced Details
 
 ### IP Addressing Scheme
 
-Agent VMs are assigned IP addresses following the pattern: `192.168.56.<base_ip + (agent_number - 1) * 10>`. For example:
-- Agent 1: 192.168.56.20
-- Agent 2: 192.168.56.30
-- Agent 3: 192.168.56.40
-And so on...
+Under Multipass, VM IPs are dynamically assigned by the Multipass bridge DHCP (typically `192.168.64.x` on macOS, `10.118.x.x` on Linux). After `make up-hub` completes:
+
+- The hub IP is discovered via `multipass info hub --format json`
+- It is stored as `export HUB_IP=<ip>` in `mycreds.env`
+- All agent VMs receive the hub IP at launch time via their cloud-init config
+
+There is no fixed IP scheme. Re-running `make up-hub` will re-discover and re-write the IP in `mycreds.env`.
 
 ### Resource Allocation
 
-Each agent VM is configured with:
-- Memory: 2048MB (2GB) by default
-- Disk: 20GB by default
-- CPU: 1 core (default VirtualBox setting)
+Default per-VM allocation:
+- **Hub:** 4 GB RAM, 50 GB disk, 2 vCPUs
+- **Agents:** 2 GB RAM, 20 GB disk, 1 vCPU
 
-These values can be customized using the environment variables described in the Advanced Configuration section.
+Customize with `MEMORY`, `DISK_SIZE`, and `MULTIPASS_IMAGE` environment variables.
+
+## Migration from Vagrant + VirtualBox
+
+If you are upgrading from the Vagrant/VirtualBox-based branch:
+
+1. **Destroy existing VMs** (on the old branch):
+   ```bash
+   make down
+   ```
+
+2. **Uninstall Vagrant and VirtualBox** (optional, but frees disk space):
+   ```bash
+   # macOS
+   brew uninstall vagrant
+   # Remove VirtualBox via its uninstaller
+   ```
+
+3. **Install Multipass** from [https://multipass.run](https://multipass.run)
+
+4. **Install `jq`:**
+   ```bash
+   brew install jq          # macOS
+   sudo apt-get install jq  # Linux
+   ```
+
+5. **Check out this branch** and verify prerequisites:
+   ```bash
+   make check
+   ```
+
+6. **Provision as normal:**
+   ```bash
+   make init
+   ```
+
+**What changed:**
+- `Vagrantfile.hub` and `Vagrantfile.template.erb` → replaced by `cloud-init/hub.yaml` and `cloud-init/agent.yaml.template`
+- `packer/` and `build-custom-box.sh` → removed (no box build step needed)
+- Fixed `192.168.56.x` network → dynamic IPs assigned by Multipass, stored in `mycreds.env`
+- `vagrant ssh` → `multipass shell`
+- `vagrant destroy` → `multipass delete --purge`
+- `BOX_VERSION`, `HUB_OS_TYPE`, `AGENT_OS_TYPE` variables → removed
+- Only Ubuntu 22.04 is supported in this release; multi-OS support will be added in a future change
