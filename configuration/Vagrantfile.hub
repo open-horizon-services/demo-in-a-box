@@ -1,6 +1,7 @@
 Vagrant.configure("2") do |config|
   hub_ip = ENV.fetch('HUB_IP', '192.168.56.10')
-  
+  expose_registry_port = ENV.fetch('EXPOSE_REGISTRY_PORT', 'false')
+
   # Use hub-specific box (allows mixed OS)
   config.vm.box = ENV.fetch('HUB_BOX_NAME', 'demo-in-a-box/ubuntu-jammy-horizon')
   # Only set box_version for date-like versions (for base box pinning)
@@ -16,6 +17,11 @@ Vagrant.configure("2") do |config|
   config.vm.network "forwarded_port", guest: 3111, host: 3111, auto_correct: true
   config.vm.network "forwarded_port", guest: 9008, host: 9008, auto_correct: true
   config.vm.network "forwarded_port", guest: 9443, host: 9443, auto_correct: true
+  # Optional: forward registry port to host for external device (e.g. Raspberry Pi) access
+  # Enable by setting EXPOSE_REGISTRY_PORT=true before 'make init'
+  if expose_registry_port == 'true'
+    config.vm.network "forwarded_port", guest: 5000, host: 5000, auto_correct: true
+  end
   config.vm.provider "virtualbox" do |vb|
     vb.memory = "4096"
     vb.linked_clone = true
@@ -188,5 +194,77 @@ EOF
     done
     
     echo "All hub services are running and healthy"
+    
+    # ===== Step 1.1: Local Registry Setup =====
+    echo "==> Setting up local Docker registry..."
+    
+    # Create persistent storage directory for registry
+    mkdir -p /var/lib/registry
+    
+    # Start Docker Registry v2 container if not already running
+    if ! docker ps -a --format '{{.Names}}' | grep -qx registry; then
+      docker run -d \
+        --name registry \
+        --restart=always \
+        -p 5000:5000 \
+        -v /var/lib/registry:/var/lib/docker/registry \
+        registry:2
+    else
+      docker start registry >/dev/null 2>&1 || true
+    fi
+    
+    # Configure firewall for registry port
+    if [ "$OS_ID" = "ubuntu" ]; then
+      echo "==> Configuring UFW for registry port 5000"
+      ufw allow 5000/tcp
+    elif [ "$OS_ID" = "fedora" ]; then
+      echo "==> Configuring firewalld for registry port 5000"
+      firewall-cmd --permanent --add-port=5000/tcp
+      firewall-cmd --reload
+    fi
+    
+    # Wait for registry to be ready
+    echo "Waiting for registry to be ready..."
+    for i in {1..30}; do
+      if curl -sf http://${HUB_IP}:5000/v2/ >/dev/null 2>&1; then
+        echo "✓ Registry is ready"
+        break
+      fi
+      if [ $i -eq 30 ]; then
+        echo "ERROR: Registry failed to start after 5 minutes"
+        echo "Registry container status:"
+        docker ps -a --filter "name=registry" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        echo "Registry logs:"
+        docker logs registry 2>&1 | tail -30
+        exit 1
+      fi
+      sleep 10
+    done
+    
+    # Verify registry catalog endpoint
+    if curl -sf http://${HUB_IP}:5000/v2/_catalog | grep -q "repositories"; then
+      echo "✓ Registry catalog endpoint verified"
+    else
+      echo "ERROR: Registry catalog endpoint not responding correctly"
+      exit 1
+    fi
+    
+    echo "✓ Local Docker registry setup complete"
+    
+    # ===== Phase 2: Blessed Samples Core Build Pipeline =====
+    # Delegated to scripts/build-blessed-samples.sh (Issue #34).
+    # OH_EXAMPLES_REPO is exported so make publish targets inherit it.
+    # Non-fatal: provisioning succeeds even if blessed samples build fails.
+    if [ -f /vagrant/scripts/build-blessed-samples.sh ]; then
+      chmod +x /vagrant/scripts/build-blessed-samples.sh
+      export OH_EXAMPLES_REPO="${OH_EXAMPLES_REPO:-https://raw.githubusercontent.com/open-horizon/examples/master}"
+      BLESSED_SAMPLES_FILE=/vagrant/blessedSamples.txt \
+      HUB_IP="${HUB_IP}" \
+      REGISTRY_URL="${HUB_IP}:5000" \
+      BLESSED_SAMPLES_CREDENTIALS=/vagrant/mycreds.env \
+      /vagrant/scripts/build-blessed-samples.sh /vagrant/blessedSamples.txt || true
+    else
+      echo "==> scripts/build-blessed-samples.sh not found; skipping blessed samples build pipeline"
+    fi
   SHELL
 end
