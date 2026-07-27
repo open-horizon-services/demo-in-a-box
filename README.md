@@ -285,7 +285,9 @@ make check
 make init
 ```
 
-`make init` runs `make up-hub` (launches hub, writes `mycreds.env`) then `make up` (launches agent VMs with cloud-init).
+`make init` runs `make up-hub` (ensures the hub VM exists, refreshes `mycreds.env`) then `make up` (ensures the requested agent VMs exist with cloud-init).
+
+If `make init` times out or is interrupted, you can safely run it again. Existing VMs are reused, stopped VMs are started, the hub IP is re-discovered, and only missing agents are launched.
 
 Installation time:
 - **unicycle:** 30–45 minutes (cloud-init installs packages on first run)
@@ -301,6 +303,8 @@ Customize with environment variables before `make init`:
 * `DISK_SIZE` — Disk per agent VM in GB (default: 20)
 * `MULTIPASS_IMAGE` — Ubuntu cloud image to use (default: `22.04`)
 * `SYSTEM_CONFIGURATION` — Shortcut: `unicycle` | `bicycle` | `car` | `semi`
+
+**Note:** Skipping FDO means device onboarding via FIDO Device Onboard will not be available. Manual agent registration will still work normally.
 
 #### Custom Resource Example
 ```shell
@@ -435,7 +439,7 @@ Under Multipass, VM IPs are dynamically assigned by the Multipass bridge DHCP (t
 - It is stored as `export HUB_IP=<ip>` in `mycreds.env`
 - All agent VMs receive the hub IP at launch time via their cloud-init config
 
-There is no fixed IP scheme. Re-running `make up-hub` will re-discover and re-write the IP in `mycreds.env`.
+There is no fixed IP scheme. Re-running `make up-hub` will re-discover and re-write the IP in `mycreds.env`, and re-running `make init` will reuse the existing hub and only create any missing agents.
 
 ### Resource Allocation
 

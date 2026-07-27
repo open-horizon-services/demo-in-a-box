@@ -156,11 +156,20 @@ generate-agent-configs: agent-config-external agent-config-internal
 init: up-hub up
 
 up-hub:
-	@echo "Launching hub VM via Multipass (this takes ~20-40 minutes)..."
-	@multipass launch --name hub --cpus 2 --memory 4G --disk 50G \
-		--cloud-init cloud-init/hub.yaml $(MULTIPASS_IMAGE)
-	@echo "Hub VM launched. Waiting for IP address..."
-	@HUB_IP=""; \
+	@echo "Checking for existing hub VM..."
+	@HUB_STATE=$$(multipass info hub --format json 2>/dev/null | jq -r '.info.hub.state // empty' 2>/dev/null); \
+	if [ -n "$$HUB_STATE" ]; then \
+		echo "  Hub VM exists (state: $$HUB_STATE) - stopping and deleting..."; \
+		multipass stop hub 2>/dev/null || true; \
+		multipass delete hub; \
+		multipass purge; \
+		echo "  ✓ Hub VM deleted"; \
+	fi; \
+	echo "  Launching fresh hub VM (this takes ~20-40 minutes)..."; \
+	multipass launch --name hub --cpus 2 --memory 4G --disk 50G \
+		--cloud-init cloud-init/hub.yaml $(MULTIPASS_IMAGE); \
+	echo "Waiting for hub IP address..."; \
+	HUB_IP=""; \
 	for i in $$(seq 1 10); do \
 		HUB_IP=$$(multipass info hub --format json 2>/dev/null | jq -r '.info.hub.ipv4[0] // empty' 2>/dev/null); \
 		if [ -n "$$HUB_IP" ] && [ "$$HUB_IP" != "null" ]; then \
@@ -174,8 +183,70 @@ up-hub:
 		echo "ERROR: Could not discover hub VM IP after 10 attempts."; \
 		exit 1; \
 	fi; \
+	echo "Verifying Exchange installation..."; \
+	EXCHANGE_READY=0; \
+	for i in $$(seq 1 10); do \
+		if multipass exec hub -- bash -c 'HUB_IP=$$(ip route get 1.1.1.1 2>/dev/null | grep -oP "src \K\S+" | head -1); curl -sf http://$$HUB_IP:3090/v1/admin/version' >/dev/null 2>&1; then \
+			echo "✓ Exchange is responding"; \
+			EXCHANGE_READY=1; \
+			break; \
+		fi; \
+		echo "  Waiting for Exchange... (attempt $$i/10)"; \
+		sleep 10; \
+	done; \
+	if [ $$EXCHANGE_READY -eq 0 ]; then \
+		echo "WARNING: Exchange is not responding after 100 seconds."; \
+		echo "Attempting to recover existing hub installation..."; \
+		multipass exec hub -- sudo bash -c '\
+			set -e; \
+			export HUB_IP=$$(ip route get 1.1.1.1 2>/dev/null | grep -oP "src \K\S+" | head -1); \
+			export HZN_LISTEN_IP="$$HUB_IP"; \
+			export CSS_IMAGE_TAG=latest; \
+			export MONGO_IMAGE_TAG=4.0.6; \
+			export EXCHANGE_IMAGE_NAME=quay.io/open-horizon/exchange-ubi; \
+			export EXCHANGE_IMAGE_TAG=testing; \
+			echo "Cleaning up stale Open Horizon hub containers..."; \
+			docker ps -aq --filter name=agbot --filter name=css-api --filter name=exchange-api --filter name=exchange-db --filter name=mongo --filter name=postgres --filter name=postgres-exchange --filter name=postgres-fdo --filter name=postgres-fdo-owner-service --filter name=vault | xargs -r docker rm -f; \
+			echo "Cleaning up stale Open Horizon hub volumes..."; \
+			docker volume ls -q | grep -E "^(postgres|mongo|exchange|agbot|css|fdo|vault)" | xargs -r docker volume rm -f || true; \
+			echo "Cleaning up existing docker-compose installation..."; \
+			rm -f /usr/bin/docker-compose /usr/local/bin/docker-compose; \
+			echo "Re-deploying Open Horizon management hub..."; \
+			curl -sSL https://raw.githubusercontent.com/open-horizon/devops/master/mgmt-hub/deploy-mgmt-hub.sh | bash -s -- 2>&1 | tee /tmp/deploy-output.txt; \
+			HZN_ORG_ID=$$(grep "export HZN_ORG_ID=" /tmp/deploy-output.txt | tail -1 | cut -d"=" -f2); \
+			HZN_EXCHANGE_USER_AUTH=$$(grep "export HZN_EXCHANGE_USER_AUTH=" /tmp/deploy-output.txt | tail -1 | cut -d"=" -f2); \
+			if [ -z "$$HZN_ORG_ID" ] || [ -z "$$HZN_EXCHANGE_USER_AUTH" ]; then \
+				echo "ERROR: Failed to extract credentials from re-deployment" >&2; \
+				exit 1; \
+			fi; \
+			echo "export HZN_ORG_ID=\"$$HZN_ORG_ID\"" > /root/mycreds.env; \
+			echo "export HZN_EXCHANGE_USER_AUTH=\"$$HZN_EXCHANGE_USER_AUTH\"" >> /root/mycreds.env; \
+			echo "✓ Credentials written to /root/mycreds.env"; \
+		'; \
+		if [ $$? -ne 0 ]; then \
+			echo "ERROR: Exchange re-installation failed."; \
+			echo "Check hub logs: make connect-hub"; \
+			exit 1; \
+		fi; \
+		echo "Verifying Exchange after re-installation..."; \
+		EXCHANGE_READY=0; \
+		for i in $$(seq 1 10); do \
+			if multipass exec hub -- bash -c 'HUB_IP=$$(ip route get 1.1.1.1 2>/dev/null | grep -oP "src \K\S+" | head -1); curl -sf http://$$HUB_IP:3090/v1/admin/version' >/dev/null 2>&1; then \
+				echo "✓ Exchange is responding after re-installation"; \
+				EXCHANGE_READY=1; \
+				break; \
+			fi; \
+			echo "  Waiting for Exchange... (attempt $$i/10)"; \
+			sleep 10; \
+		done; \
+		if [ $$EXCHANGE_READY -eq 0 ]; then \
+			echo "ERROR: Exchange still not responding after re-installation."; \
+			echo "Check hub logs: make connect-hub"; \
+			exit 1; \
+		fi; \
+	fi; \
 	echo "Extracting Open Horizon credentials from hub VM..."; \
-	multipass exec hub -- bash -c 'for i in $$(seq 1 30); do [ -f /root/mycreds.env ] && cat /root/mycreds.env && exit 0; sleep 10; done; echo "ERROR: /root/mycreds.env not found after 5 minutes" >&2; exit 1' > mycreds.env; \
+	multipass exec hub -- bash -c 'for i in $$(seq 1 10); do [ -f /root/mycreds.env ] && cat /root/mycreds.env && exit 0; sleep 10; done; echo "ERROR: /root/mycreds.env not found after 100 seconds" >&2; exit 1' > mycreds.env; \
 	if [ $$? -ne 0 ]; then \
 		echo "ERROR: Failed to extract credentials. Hub provisioning may have failed."; \
 		echo "Check hub logs: make connect-hub"; \
@@ -202,7 +273,20 @@ up:
 		echo "ERROR: HUB_IP missing from mycreds.env. Re-run 'make up-hub'."; \
 		exit 1; \
 	fi; \
-	echo "Launching $(NUM_AGENTS) agent VM(s) via Multipass..."; \
+	echo "Checking for existing agent VMs..."; \
+	for i in $$(seq 1 $(NUM_AGENTS)); do \
+		AGENT_STATE=$$(multipass info agent$$i --format json 2>/dev/null | jq -r '.info["agent'$$i'"].state // empty' 2>/dev/null); \
+		if [ -n "$$AGENT_STATE" ]; then \
+			echo "  agent$$i exists (state: $$AGENT_STATE) - stopping and deleting..."; \
+			multipass stop agent$$i 2>/dev/null || true; \
+			multipass delete agent$$i; \
+			echo "  ✓ agent$$i deleted"; \
+		fi; \
+	done; \
+	if multipass list 2>/dev/null | grep -q "^agent"; then \
+		multipass purge; \
+	fi; \
+	echo "Launching $(NUM_AGENTS) fresh agent VM(s)..."; \
 	PIDS=""; \
 	for i in $$(seq 1 $(NUM_AGENTS)); do \
 		export AGENT_NUM=$$i; \
@@ -211,7 +295,7 @@ up:
 		export HZN_EXCHANGE_USER_AUTH=$$HZN_EXCHANGE_USER_AUTH; \
 		AGENT_CLOUD_INIT="/tmp/agent$$i-cloud-init.yaml"; \
 		envsubst < cloud-init/agent.yaml.template > $$AGENT_CLOUD_INIT; \
-		echo "  Starting agent$$i..."; \
+		echo "  Launching agent$$i..."; \
 		multipass launch --name agent$$i \
 			--cpus 1 \
 			--memory $(MEMORY)M \
@@ -220,7 +304,7 @@ up:
 			$(MULTIPASS_IMAGE) & \
 		PIDS="$$PIDS $$!"; \
 	done; \
-	echo "Waiting for all agent VMs to finish provisioning..."; \
+	echo "Waiting for agent VMs to finish provisioning..."; \
 	FAILED=0; \
 	for PID in $$PIDS; do \
 		wait $$PID || FAILED=1; \
@@ -229,7 +313,7 @@ up:
 		echo "ERROR: One or more agent VMs failed to provision."; \
 		exit 1; \
 	fi; \
-	echo "✓ All agent VMs provisioned."
+	echo "✓ All $(NUM_AGENTS) agent VMs provisioned."
 
 connect-hub:
 	@multipass shell hub
@@ -293,18 +377,16 @@ port-forward:
 	fi
 	@echo "Starting port-forward tunnels to hub services..."
 	@. ./mycreds.env; \
-	EXTRA_PORT=""; \
+	PORTS="3090 3111 9008 9443"; \
 	if [ "$(EXPOSE_REGISTRY_PORT)" = "true" ]; then \
-		EXTRA_PORT="-L 5000:localhost:5000"; \
+		PORTS="$$PORTS 5000"; \
 	fi; \
 	multipass exec hub -- sudo bash -c '\
 		which socat >/dev/null 2>&1 || apt-get install -q -y socat; \
-		for port in 3090 3111 9008 9443 '"$$([ "$(EXPOSE_REGISTRY_PORT)" = "true" ] && echo 5000)"'; do \
-			[ -z "$$port" ] && continue; \
+		for port in '"$$PORTS"'; do \
 			socat TCP-LISTEN:$$port,fork,reuseaddr TCP:127.0.0.1:$$port & \
-		done' 2>/dev/null & \
-	echo "$$!" > /tmp/port-forward.pid
-	@echo "✓ Port-forward started (PID: $$(cat /tmp/port-forward.pid))"
+		done' 2>/dev/null &
+	@echo "✓ Port-forward started"
 	@echo "  Exchange:  http://localhost:3090"
 	@echo "  AgBot:     http://localhost:3111"
 	@echo "  FDO:       http://localhost:9008"

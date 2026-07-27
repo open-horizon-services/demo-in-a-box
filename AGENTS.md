@@ -33,7 +33,7 @@ demo-in-a-box/
 | Modify hub services | `cloud-init/hub.yaml` | 4 GB RAM, ports opened via UFW |
 | Modify agent provisioning | `cloud-init/agent.yaml.template` | envsubst template; escape non-substituted `$VAR` as `\$VAR` |
 | System topologies | `Makefile` `ifeq ($(SYSTEM_CONFIGURATION),...)` blocks | unicycle/bicycle/car/semi configs |
-| Provision VMs | `make init` | Runs up-hub + up |
+| Provision VMs | `make init` | Runs up-hub + up; rerunnable after interruption, reuses existing VMs |
 | Connect to agent | `make connect VMNAME=agent2` | Default: `agent1` |
 | Destroy all VMs | `make down` | Runs destroy + destroy-hub + clean |
 | Configure blessed samples | `blessedSamples.txt` (project root) | One service entry per line |
@@ -91,6 +91,7 @@ Set before `make init`:
 ### Dynamic IPs
 - Hub and agent IPs assigned by Multipass DHCP; can change if VMs are deleted and recreated
 - **Mitigation:** `make up-hub` always re-discovers and re-writes hub IP into `mycreds.env`
+- **Rerun behavior:** `make init` can be re-run after interruption; it refreshes hub credentials/IP state and only creates missing agents
 
 ### Error Suppression
 - Makefile targets use `@` prefix (suppress output)
@@ -110,11 +111,16 @@ envsubst < cloud-init/agent.yaml.template > /tmp/agentN-cloud-init.yaml
 ```
 
 ### Credential Extraction
-Hub provisioning writes `/root/mycreds.env` inside the VM. Makefile extracts it:
+Hub provisioning writes `/root/mycreds.env` inside the VM. Before extraction, Makefile verifies Exchange is healthy:
+```make
+# Verify Exchange is responding (30 retries, 10s intervals)
+multipass exec hub -- curl -sf http://localhost:3090/v1/admin/version
+```
+Then extracts credentials:
 ```make
 multipass exec hub -- bash -c '...; cat /root/mycreds.env' > mycreds.env
 ```
-Then appends the discovered hub IP:
+And appends the discovered hub IP:
 ```make
 echo "export HUB_IP=\"$$HUB_IP\"" >> mycreds.env
 ```
@@ -126,7 +132,7 @@ multipass info hub --format json | jq -r '.info.hub.ipv4[0] // empty'
 ```
 
 ### Parallel Agent Provisioning
-Agent VMs launched concurrently via background processes:
+Missing agent VMs are launched concurrently via background processes; existing agents are skipped and stopped agents are started:
 ```make
 multipass launch --name agentN ... &
 PIDS="$PIDS $!"
