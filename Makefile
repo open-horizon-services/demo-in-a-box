@@ -183,72 +183,36 @@ up-hub:
 		echo "ERROR: Could not discover hub VM IP after 10 attempts."; \
 		exit 1; \
 	fi; \
-	echo "Verifying Exchange installation..."; \
-	EXCHANGE_READY=0; \
-	for i in $$(seq 1 10); do \
-		if multipass exec hub -- bash -c 'HUB_IP=$$(ip route get 1.1.1.1 2>/dev/null | grep -oP "src \K\S+" | head -1); curl -sf http://$$HUB_IP:3090/v1/admin/version' >/dev/null 2>&1; then \
-			echo "✓ Exchange is responding"; \
-			EXCHANGE_READY=1; \
+	echo "Waiting for cloud-init to complete (this takes ~2-5 minutes)..."; \
+	CLOUD_INIT_DONE=0; \
+	for i in $$(seq 1 60); do \
+		if multipass exec hub -- test -f /var/lib/cloud/instance/boot-finished 2>/dev/null; then \
+			echo "✓ Cloud-init completed"; \
+			CLOUD_INIT_DONE=1; \
 			break; \
 		fi; \
-		echo "  Waiting for Exchange... (attempt $$i/10)"; \
+		if [ $$((i % 6)) -eq 0 ]; then \
+			echo "  Still provisioning... ($$((i / 6)) minutes elapsed)"; \
+		fi; \
 		sleep 10; \
 	done; \
-	if [ $$EXCHANGE_READY -eq 0 ]; then \
-		echo "WARNING: Exchange is not responding after 100 seconds."; \
-		echo "Attempting to recover existing hub installation..."; \
-		multipass exec hub -- sudo bash -c '\
-			set -e; \
-			export HUB_IP=$$(ip route get 1.1.1.1 2>/dev/null | grep -oP "src \K\S+" | head -1); \
-			export HZN_LISTEN_IP="$$HUB_IP"; \
-			export CSS_IMAGE_TAG=latest; \
-			export MONGO_IMAGE_TAG=4.0.6; \
-			export EXCHANGE_IMAGE_NAME=quay.io/open-horizon/exchange-ubi; \
-			export EXCHANGE_IMAGE_TAG=testing; \
-			echo "Cleaning up stale Open Horizon hub containers..."; \
-			docker ps -aq --filter name=agbot --filter name=css-api --filter name=exchange-api --filter name=exchange-db --filter name=mongo --filter name=postgres --filter name=postgres-exchange --filter name=postgres-fdo --filter name=postgres-fdo-owner-service --filter name=vault | xargs -r docker rm -f; \
-			echo "Cleaning up stale Open Horizon hub volumes..."; \
-			docker volume ls -q | grep -E "^(postgres|mongo|exchange|agbot|css|fdo|vault)" | xargs -r docker volume rm -f || true; \
-			echo "Cleaning up existing docker-compose installation..."; \
-			rm -f /usr/bin/docker-compose /usr/local/bin/docker-compose; \
-			echo "Re-deploying Open Horizon management hub..."; \
-			curl -sSL https://raw.githubusercontent.com/open-horizon/devops/master/mgmt-hub/deploy-mgmt-hub.sh | bash -s -- 2>&1 | tee /tmp/deploy-output.txt; \
-			HZN_ORG_ID=$$(grep "export HZN_ORG_ID=" /tmp/deploy-output.txt | tail -1 | cut -d"=" -f2); \
-			HZN_EXCHANGE_USER_AUTH=$$(grep "export HZN_EXCHANGE_USER_AUTH=" /tmp/deploy-output.txt | tail -1 | cut -d"=" -f2); \
-			if [ -z "$$HZN_ORG_ID" ] || [ -z "$$HZN_EXCHANGE_USER_AUTH" ]; then \
-				echo "ERROR: Failed to extract credentials from re-deployment" >&2; \
-				exit 1; \
-			fi; \
-			echo "export HZN_ORG_ID=\"$$HZN_ORG_ID\"" > /root/mycreds.env; \
-			echo "export HZN_EXCHANGE_USER_AUTH=\"$$HZN_EXCHANGE_USER_AUTH\"" >> /root/mycreds.env; \
-			echo "✓ Credentials written to /root/mycreds.env"; \
-		'; \
-		if [ $$? -ne 0 ]; then \
-			echo "ERROR: Exchange re-installation failed."; \
-			echo "Check hub logs: make connect-hub"; \
-			exit 1; \
-		fi; \
-		echo "Verifying Exchange after re-installation..."; \
-		EXCHANGE_READY=0; \
-		for i in $$(seq 1 10); do \
-			if multipass exec hub -- bash -c 'HUB_IP=$$(ip route get 1.1.1.1 2>/dev/null | grep -oP "src \K\S+" | head -1); curl -sf http://$$HUB_IP:3090/v1/admin/version' >/dev/null 2>&1; then \
-				echo "✓ Exchange is responding after re-installation"; \
-				EXCHANGE_READY=1; \
-				break; \
-			fi; \
-			echo "  Waiting for Exchange... (attempt $$i/10)"; \
-			sleep 10; \
-		done; \
-		if [ $$EXCHANGE_READY -eq 0 ]; then \
-			echo "ERROR: Exchange still not responding after re-installation."; \
-			echo "Check hub logs: make connect-hub"; \
-			exit 1; \
-		fi; \
+	if [ $$CLOUD_INIT_DONE -eq 0 ]; then \
+		echo "ERROR: Cloud-init did not complete after 10 minutes."; \
+		echo "Check hub logs: make connect-hub"; \
+		exit 1; \
+	fi; \
+	echo "Installing Open Horizon Exchange (this takes ~20-40 minutes)..."; \
+	multipass transfer scripts/install-exchange.sh hub:/tmp/install-exchange.sh; \
+	multipass exec hub -- sudo bash /tmp/install-exchange.sh; \
+	if [ $$? -ne 0 ]; then \
+		echo "ERROR: Exchange installation failed."; \
+		echo "Check hub logs: make connect-hub"; \
+		exit 1; \
 	fi; \
 	echo "Extracting Open Horizon credentials from hub VM..."; \
-	multipass exec hub -- bash -c 'for i in $$(seq 1 10); do [ -f /root/mycreds.env ] && cat /root/mycreds.env && exit 0; sleep 10; done; echo "ERROR: /root/mycreds.env not found after 100 seconds" >&2; exit 1' > mycreds.env; \
+	multipass exec hub -- sudo cat /root/mycreds.env > mycreds.env; \
 	if [ $$? -ne 0 ]; then \
-		echo "ERROR: Failed to extract credentials. Hub provisioning may have failed."; \
+		echo "ERROR: Failed to extract credentials."; \
 		echo "Check hub logs: make connect-hub"; \
 		exit 1; \
 	fi; \

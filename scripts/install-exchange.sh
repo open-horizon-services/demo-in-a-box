@@ -1,0 +1,129 @@
+#!/bin/bash
+# Install Open Horizon Exchange on hub VM
+# This script is executed by the Makefile after cloud-init completes
+# and the hub IP has been discovered.
+
+set -e
+
+# Discover hub IP
+HUB_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' | head -1)
+if [ -z "$HUB_IP" ]; then
+    echo "ERROR: Could not discover hub IP address" >&2
+    exit 1
+fi
+
+echo "Discovered HUB_IP=${HUB_IP}"
+export HUB_IP
+export HZN_LISTEN_IP="$HUB_IP"
+export CSS_IMAGE_TAG=latest
+export MONGO_IMAGE_TAG=4.0.6
+export EXCHANGE_IMAGE_NAME=quay.io/open-horizon/exchange-ubi
+export EXCHANGE_IMAGE_TAG=testing
+
+# Clean up any existing docker-compose installations
+rm -f /usr/bin/docker-compose /usr/local/bin/docker-compose
+
+# Deploy Open Horizon management hub
+echo "Deploying Open Horizon management hub..."
+curl -sSL https://raw.githubusercontent.com/open-horizon/devops/master/mgmt-hub/deploy-mgmt-hub.sh | bash -s -- 2>&1 | tee /tmp/deploy-output.txt
+
+# Extract credentials from deploy output
+HZN_ORG_ID=$(grep "export HZN_ORG_ID=" /tmp/deploy-output.txt | tail -1 | cut -d'=' -f2)
+HZN_EXCHANGE_USER_AUTH=$(grep "export HZN_EXCHANGE_USER_AUTH=" /tmp/deploy-output.txt | tail -1 | cut -d'=' -f2)
+
+if [ -z "$HZN_ORG_ID" ] || [ -z "$HZN_EXCHANGE_USER_AUTH" ]; then
+    echo "ERROR: Failed to extract credentials from deploy-mgmt-hub.sh output" >&2
+    exit 1
+fi
+
+# Write primary credentials
+cat > /root/mycreds.env <<EOF
+export HZN_ORG_ID="$HZN_ORG_ID"
+export HZN_EXCHANGE_USER_AUTH="$HZN_EXCHANGE_USER_AUTH"
+EOF
+echo "✓ Primary credentials written to /root/mycreds.env"
+
+# Extract additional credential sets
+ROOT_ROOT_ORG=$(grep -A 1 "EXCHANGE_ROOT_PW=" /tmp/deploy-output.txt | grep "export HZN_ORG_ID=" | head -1 | cut -d'=' -f2)
+ROOT_ROOT_AUTH=$(grep -A 2 "EXCHANGE_ROOT_PW=" /tmp/deploy-output.txt | grep "export HZN_EXCHANGE_USER_AUTH=" | head -1 | cut -d'=' -f2)
+cat > /root/root-root.env <<EOF
+export HZN_ORG_ID="$ROOT_ROOT_ORG"
+export HZN_EXCHANGE_USER_AUTH="$ROOT_ROOT_AUTH"
+EOF
+
+ROOT_HUBADMIN_ORG=$(grep -A 1 "EXCHANGE_HUB_ADMIN_PW=" /tmp/deploy-output.txt | grep "export HZN_ORG_ID=" | head -1 | cut -d'=' -f2)
+ROOT_HUBADMIN_AUTH=$(grep -A 2 "EXCHANGE_HUB_ADMIN_PW=" /tmp/deploy-output.txt | grep "export HZN_EXCHANGE_USER_AUTH=" | head -1 | cut -d'=' -f2)
+cat > /root/root-hubadmin.env <<EOF
+export HZN_ORG_ID="$ROOT_HUBADMIN_ORG"
+export HZN_EXCHANGE_USER_AUTH="$ROOT_HUBADMIN_AUTH"
+EOF
+
+IBM_ADMIN_ORG=$(grep -A 1 "EXCHANGE_SYSTEM_ADMIN_PW=" /tmp/deploy-output.txt | grep "export HZN_ORG_ID=" | head -1 | cut -d'=' -f2)
+IBM_ADMIN_AUTH=$(grep -A 2 "EXCHANGE_SYSTEM_ADMIN_PW=" /tmp/deploy-output.txt | grep "export HZN_EXCHANGE_USER_AUTH=" | head -1 | cut -d'=' -f2)
+cat > /root/ibm-admin.env <<EOF
+export HZN_ORG_ID="$IBM_ADMIN_ORG"
+export HZN_EXCHANGE_USER_AUTH="$IBM_ADMIN_AUTH"
+EOF
+
+MYORG_ADMIN_ORG=$(grep -A 1 "EXCHANGE_USER_ADMIN_PW=" /tmp/deploy-output.txt | grep "export HZN_ORG_ID=" | head -1 | cut -d'=' -f2)
+MYORG_ADMIN_AUTH=$(grep -A 2 "EXCHANGE_USER_ADMIN_PW=" /tmp/deploy-output.txt | grep "export HZN_EXCHANGE_USER_AUTH=" | head -1 | cut -d'=' -f2)
+cat > /root/myorg-admin.env <<EOF
+export HZN_ORG_ID="$MYORG_ADMIN_ORG"
+export HZN_EXCHANGE_USER_AUTH="$MYORG_ADMIN_AUTH"
+EOF
+
+MYORG_NODE1_ORG=$(grep -A 1 "HZN_DEVICE_TOKEN=" /tmp/deploy-output.txt | grep "export HZN_ORG_ID=" | head -1 | cut -d'=' -f2)
+MYORG_NODE1_AUTH=$(grep -A 2 "HZN_DEVICE_TOKEN=" /tmp/deploy-output.txt | grep "export HZN_EXCHANGE_USER_AUTH=" | head -1 | cut -d'=' -f2)
+cat > /root/myorg-node1.env <<EOF
+export HZN_ORG_ID="$MYORG_NODE1_ORG"
+export HZN_EXCHANGE_USER_AUTH="$MYORG_NODE1_AUTH"
+EOF
+echo "✓ Additional credential files written"
+
+# Wait for Exchange to be healthy
+echo "Waiting for Exchange to be ready..."
+for i in $(seq 1 30); do
+    if curl -sf http://localhost:3090/v1/admin/version >/dev/null 2>&1; then
+        echo "✓ Exchange is ready"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "ERROR: Exchange failed to start after 5 minutes" >&2
+        exit 1
+    fi
+    sleep 10
+done
+
+# Wait for CSS to be healthy
+echo "Waiting for CSS to be ready..."
+for i in $(seq 1 60); do
+    if docker ps --filter "name=css-api" --filter "health=healthy" | grep -q css-api; then
+        echo "✓ CSS is ready"
+        break
+    fi
+    if [ "$i" -eq 60 ]; then
+        echo "ERROR: CSS failed to become healthy after 10 minutes" >&2
+        docker ps -a --filter "name=css-api" --format "table {{.Names}}\t{{.Status}}"
+        docker logs css-api 2>&1 | tail -20
+        exit 1
+    fi
+    sleep 10
+done
+
+# Wait for AgBot to be healthy
+echo "Waiting for AgBot to be ready..."
+for i in $(seq 1 60); do
+    if docker ps --filter "name=agbot" --filter "health=healthy" | grep -q agbot; then
+        echo "✓ AgBot is ready"
+        break
+    fi
+    if [ "$i" -eq 60 ]; then
+        echo "ERROR: AgBot failed to become healthy after 10 minutes" >&2
+        docker ps -a --filter "name=agbot" --format "table {{.Names}}\t{{.Status}}"
+        docker logs agbot 2>&1 | tail -20
+        exit 1
+    fi
+    sleep 10
+done
+
+echo "✓ All hub services running and healthy"
