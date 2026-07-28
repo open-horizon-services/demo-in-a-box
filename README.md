@@ -431,6 +431,24 @@ Destroys all VMs and removes generated files.
 
 ## Advanced Details
 
+### Hub Deployment Wrapper
+
+The hub VM uses `scripts/install-exchange.sh` as a wrapper around the upstream `deploy-mgmt-hub.sh` script. This wrapper provides:
+
+1. **Dynamic IP Discovery** — Discovers the Multipass-assigned hub IP and configures the deployment
+2. **Pinned Container Versions** — Uses specific image tags for reproducibility:
+   - CSS: `1.0.2-1498` (configurable via `CSS_IMAGE_TAG`)
+   - Exchange: `2.87.0-1498` (configurable via `EXCHANGE_IMAGE_TAG`)
+   - MongoDB: `4.0.6` (configurable via `MONGO_IMAGE_TAG`)
+3. **Credential Extraction** — Parses deployment output and extracts 6 credential sets into separate files
+4. **Health Verification** — Waits for Exchange, CSS, and AgBot to become healthy with configurable timeouts:
+   - `EXCHANGE_TIMEOUT` — Exchange health check timeout in iterations (default: 30, 10s each = 5min)
+   - `SERVICE_TIMEOUT` — CSS/AgBot health check timeout in iterations (default: 60, 10s each = 10min)
+5. **Automatic Rollback** — On deployment failure, stops/removes containers and cleans up credential files
+6. **Comprehensive Error Logging** — Captures full container logs, health check status, and container state on failure
+
+The wrapper ensures the hub is fully operational before proceeding with agent provisioning.
+
 ### IP Addressing Scheme
 
 Under Multipass, VM IPs are dynamically assigned by the Multipass bridge DHCP (typically `192.168.64.x` on macOS, `10.118.x.x` on Linux). After `make up-hub` completes:

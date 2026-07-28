@@ -13,6 +13,7 @@ demo-in-a-box/
 │   ├── hub.yaml               # Hub VM provisioning (Docker, deploy-mgmt-hub.sh, registry)
 │   └── agent.yaml.template    # Agent VM template (envsubst renders per-agent at launch)
 ├── scripts/                   # Provisioning scripts
+│   ├── install-exchange.sh    # Hub deployment wrapper (IP discovery, credential extraction, health checks, rollback)
 │   └── build-blessed-samples.sh  # Blessed samples build pipeline
 ├── tests/                     # Test scripts
 │   └── test-blessed-samples.sh   # Unit tests for build pipeline
@@ -31,6 +32,7 @@ demo-in-a-box/
 |------|----------|-------|
 | Change VM resources | `Makefile` — `NUM_AGENTS`, `MEMORY`, `DISK_SIZE` vars | Top of Makefile |
 | Modify hub services | `cloud-init/hub.yaml` | 4 GB RAM, ports opened via UFW |
+| Hub deployment script | `scripts/install-exchange.sh` | Wrapper for deploy-mgmt-hub.sh with validation, rollback, pinned versions |
 | Modify agent provisioning | `cloud-init/agent.yaml.template` | envsubst template; escape non-substituted `$VAR` as `\$VAR` |
 | System topologies | `Makefile` `ifeq ($(SYSTEM_CONFIGURATION),...)` blocks | unicycle/bicycle/car/semi configs |
 | Provision VMs | `make init` | Runs up-hub + up; rerunnable after interruption, reuses existing VMs |
@@ -69,6 +71,10 @@ Set before `make init`:
 - `EXPOSE_REGISTRY_PORT` — Use `make port-forward` instead; this flag now only affects which ports are tunnelled
 - `FAIL_FAST` — Abort blessed samples build on first failure (default: false)
 - `USE_LOCAL_REGISTRY` — Rewrite image names in service definitions to use local registry prefix (default: false)
+- `EXCHANGE_TIMEOUT` — Exchange health check timeout in iterations (default: 30, 10s each = 5min)
+- `SERVICE_TIMEOUT` — CSS/AgBot health check timeout in iterations (default: 60, 10s each = 10min)
+- `CSS_IMAGE_TAG` — CSS container image version (default: 1.0.2-1498)
+- `EXCHANGE_IMAGE_TAG` — Exchange container image version (default: 2.87.0-1498)
 
 **Removed variables (no longer exist):**
 - `BOX_VERSION`, `BOX_NAME`, `HUB_BOX_NAME`, `AGENT_BOX_NAME` — box pipeline removed
@@ -84,9 +90,10 @@ Set before `make init`:
 ## ANTI-PATTERNS (THIS PROJECT)
 
 ### Supply Chain Risks
-- Hub provisioning: `curl | bash` from open-horizon/devops master branch (NOT pinned)
-- Agent install: `curl | bash` from open-horizon/anax master branch (NOT pinned)
-- **Risk:** Scripts can change without notice; prefer commit/tag pinning
+- Hub provisioning: `curl | bash` from open-horizon/devops master branch (NOT pinned to commit/tag)
+- Agent install: `curl | bash` from open-horizon/anax master branch (NOT pinned to commit/tag)
+- **Risk:** Upstream scripts can change without notice
+- **Mitigation:** `scripts/install-exchange.sh` pins container image versions (CSS, Exchange, MongoDB) and implements rollback on failure
 
 ### Dynamic IPs
 - Hub and agent IPs assigned by Multipass DHCP; can change if VMs are deleted and recreated
@@ -111,17 +118,17 @@ envsubst < cloud-init/agent.yaml.template > /tmp/agentN-cloud-init.yaml
 ```
 
 ### Credential Extraction
-Hub provisioning writes `/root/mycreds.env` inside the VM. Before extraction, Makefile verifies Exchange is healthy:
+`scripts/install-exchange.sh` handles hub deployment and credential extraction:
+1. Discovers hub IP dynamically
+2. Deploys management hub with pinned image versions
+3. Extracts 6 credential sets from deploy output (mycreds.env, root-root.env, root-hubadmin.env, ibm-admin.env, myorg-admin.env, myorg-node1.env)
+4. Validates all extractions; exits on primary credential failure, warns on secondary failures
+5. Waits for Exchange/CSS/AgBot health checks with configurable timeouts
+6. Implements automatic rollback on deployment failure
+
+Makefile then copies credentials from hub VM:
 ```make
-# Verify Exchange is responding (30 retries, 10s intervals)
-multipass exec hub -- curl -sf http://localhost:3090/v1/admin/version
-```
-Then extracts credentials:
-```make
-multipass exec hub -- bash -c '...; cat /root/mycreds.env' > mycreds.env
-```
-And appends the discovered hub IP:
-```make
+multipass exec hub -- bash -c 'cat /root/mycreds.env' > mycreds.env
 echo "export HUB_IP=\"$$HUB_IP\"" >> mycreds.env
 ```
 
