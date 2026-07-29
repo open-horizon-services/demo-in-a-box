@@ -1,9 +1,8 @@
 #cloud-config
-# Agent VM cloud-init template.
+# Agent VM cloud-init template (basic provisioning only).
 # Rendered at launch time by the Makefile using envsubst.
-# Substitution tokens: ${HUB_IP}, ${HZN_ORG_ID}, ${HZN_EXCHANGE_USER_AUTH}, ${AGENT_NUM}
-# All other shell variable references ($ID, $i, etc.) are escaped as \$VAR in runcmd
-# scripts to prevent envsubst from replacing them.
+# Substitution tokens: ${HUB_IP}, ${AGENT_NUM}
+# Agent installation is handled by install-agent.sh after credentials are copied.
 
 package_update: true
 package_upgrade: false
@@ -47,47 +46,5 @@ runcmd:
       fi
       sleep 2
     done
-
-  # ── Write agent install config ────────────────────────────────────────────
-  - touch /root/agent-install.crt
-  - |
-    cat > /root/agent-install.cfg <<EOF
-    HZN_ORG_ID=${HZN_ORG_ID}
-    HZN_EXCHANGE_USER_AUTH=${HZN_EXCHANGE_USER_AUTH}
-    HZN_EXCHANGE_URL=http://${HUB_IP}:3090/v1
-    HZN_FSS_CSSURL=http://${HUB_IP}:9443/
-    HZN_AGBOT_URL=http://${HUB_IP}:3111
-    HZN_FDO_SVC_URL=http://${HUB_IP}:9008/api
-    EOF
-
-  # ── Install Open Horizon agent ────────────────────────────────────────────
-  - |
-    export HZN_ORG_ID="${HZN_ORG_ID}"
-    export HZN_EXCHANGE_USER_AUTH="${HZN_EXCHANGE_USER_AUTH}"
-    export HZN_EXCHANGE_URL="http://${HUB_IP}:3090/v1"
-    export HZN_FSS_CSSURL="http://${HUB_IP}:9443/"
-    export HZN_AGBOT_URL="http://${HUB_IP}:3111"
-    export HZN_FDO_SVC_URL="http://${HUB_IP}:9008/api"
-    curl -sSL https://raw.githubusercontent.com/open-horizon/anax/refs/heads/master/agent-install/agent-install.sh \
-      | bash -s -- -i anax: -k /root/agent-install.cfg -c css: \
-          -p IBM/pattern-ibm.helloworld -w '*' -T 120
-
-  # ── Verify agent is running ───────────────────────────────────────────────
-  - |
-    for i in \$(seq 1 30); do
-      if hzn node list >/dev/null 2>&1; then
-        echo "✓ Agent is running"
-        break
-      fi
-      if [ "\$i" -eq 30 ]; then
-        echo "ERROR: Agent failed to start after 2.5 minutes" >&2
-        exit 1
-      fi
-      sleep 5
-    done
-  - |
-    if ! hzn exchange status >/dev/null 2>&1; then
-      echo "ERROR: Cannot connect to Exchange at ${HUB_IP}" >&2
-      exit 1
-    fi
-    echo "✓ Agent provisioning complete and healthy (agent ${AGENT_NUM})"
+  - echo "✓ Cloud-init complete - Docker ready (agent ${AGENT_NUM})"
+  - echo "✓ Agent installation will be triggered by Makefile after credential sync"

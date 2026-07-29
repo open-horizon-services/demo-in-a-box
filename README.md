@@ -437,8 +437,8 @@ The hub VM uses `scripts/install-exchange.sh` as a wrapper around the upstream `
 
 1. **Dynamic IP Discovery** — Discovers the Multipass-assigned hub IP and configures the deployment
 2. **Pinned Container Versions** — Uses specific image tags for reproducibility:
-   - CSS: `1.0.2-1498` (configurable via `CSS_IMAGE_TAG`)
-   - Exchange: `2.87.0-1498` (configurable via `EXCHANGE_IMAGE_TAG`)
+   - CSS: `testing` (configurable via `CSS_IMAGE_TAG`)
+- Exchange: `testing` (configurable via `EXCHANGE_IMAGE_TAG`)
    - MongoDB: `4.0.6` (configurable via `MONGO_IMAGE_TAG`)
 3. **Credential Extraction** — Parses deployment output and extracts 6 credential sets into separate files
 4. **Health Verification** — Waits for Exchange, CSS, and AgBot to become healthy with configurable timeouts:

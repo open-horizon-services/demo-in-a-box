@@ -250,15 +250,14 @@ up:
 	if multipass list 2>/dev/null | grep -q "^agent"; then \
 		multipass purge; \
 	fi; \
-	echo "Launching $(NUM_AGENTS) fresh agent VM(s)..."; \
+	echo "Launching $(NUM_AGENTS) agent VM(s) (basic provisioning only)..."; \
 	PIDS=""; \
 	for i in $$(seq 1 $(NUM_AGENTS)); do \
 		export AGENT_NUM=$$i; \
 		export HUB_IP=$$HUB_IP; \
-		export HZN_ORG_ID=$$HZN_ORG_ID; \
-		export HZN_EXCHANGE_USER_AUTH=$$HZN_EXCHANGE_USER_AUTH; \
-		AGENT_CLOUD_INIT="/tmp/agent$$i-cloud-init.yaml"; \
-		envsubst < cloud-init/agent.yaml.template > $$AGENT_CLOUD_INIT; \
+		AGENT_CLOUD_INIT="$$(pwd)/.bob/tmp/agent$$i-cloud-init.yaml"; \
+		mkdir -p $$(pwd)/.bob/tmp; \
+		envsubst '$${HUB_IP} $${AGENT_NUM}' < cloud-init/agent.yaml.template > $$AGENT_CLOUD_INIT; \
 		echo "  Launching agent$$i..."; \
 		multipass launch --name agent$$i \
 			--cpus 1 \
@@ -268,16 +267,58 @@ up:
 			$(MULTIPASS_IMAGE) & \
 		PIDS="$$PIDS $$!"; \
 	done; \
-	echo "Waiting for agent VMs to finish provisioning..."; \
+	echo "Waiting for agent VMs to launch..."; \
 	FAILED=0; \
 	for PID in $$PIDS; do \
 		wait $$PID || FAILED=1; \
 	done; \
 	if [ $$FAILED -ne 0 ]; then \
-		echo "ERROR: One or more agent VMs failed to provision."; \
+		echo "ERROR: One or more agent VMs failed to launch."; \
 		exit 1; \
 	fi; \
-	echo "✓ All $(NUM_AGENTS) agent VMs provisioned."
+	echo "✓ All $(NUM_AGENTS) agent VMs launched."; \
+	echo "Waiting for cloud-init to complete on agent VMs..."; \
+	for i in $$(seq 1 $(NUM_AGENTS)); do \
+		echo "  Waiting for agent$$i cloud-init..."; \
+		CLOUD_INIT_DONE=0; \
+		for j in $$(seq 1 60); do \
+			if multipass exec agent$$i -- test -f /var/lib/cloud/instance/boot-finished 2>/dev/null; then \
+				echo "  ✓ agent$$i cloud-init completed"; \
+				CLOUD_INIT_DONE=1; \
+				break; \
+			fi; \
+			if [ $$((j % 6)) -eq 0 ]; then \
+				echo "    Still provisioning agent$$i... ($$((j / 6)) minutes elapsed)"; \
+			fi; \
+			sleep 10; \
+		done; \
+		if [ $$CLOUD_INIT_DONE -eq 0 ]; then \
+			echo "ERROR: Cloud-init did not complete on agent$$i after 10 minutes."; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "Copying credential files from hub to agent VMs..."; \
+	for i in $$(seq 1 $(NUM_AGENTS)); do \
+		echo "  Copying credentials to agent$$i..."; \
+		for cred_file in mycreds.env root-root.env root-hubadmin.env ibm-admin.env myorg-admin.env myorg-node1.env; do \
+			if multipass exec hub -- sudo test -f /root/$$cred_file 2>/dev/null; then \
+				multipass exec hub -- sudo cat /root/$$cred_file | multipass exec agent$$i -- sudo tee /root/$$cred_file > /dev/null; \
+			fi; \
+		done; \
+		echo "  ✓ Credentials copied to agent$$i"; \
+	done; \
+	echo "Installing Open Horizon agent on all VMs (this takes ~5-10 minutes per VM)..."; \
+	for i in $$(seq 1 $(NUM_AGENTS)); do \
+		echo "  Installing agent on agent$$i..."; \
+		multipass transfer scripts/install-agent.sh agent$$i:/tmp/install-agent.sh; \
+		multipass exec agent$$i -- sudo bash /tmp/install-agent.sh $$i $$HUB_IP; \
+		if [ $$? -ne 0 ]; then \
+			echo "ERROR: Agent installation failed on agent$$i."; \
+			exit 1; \
+		fi; \
+		echo "  ✓ agent$$i installation complete"; \
+	done; \
+	echo "✓ All $(NUM_AGENTS) agent VMs provisioned and registered with Exchange."
 
 connect-hub:
 	@multipass shell hub
@@ -296,6 +337,7 @@ down: destroy destroy-hub clean
 clean:
 	@rm -f mycreds.env summary.txt agent-install-external.env agent-install-internal.env
 	@rm -f /tmp/agent*-cloud-init.yaml
+	@rm -f .bob/tmp/agent*-cloud-init.yaml
 	@echo "✓ Generated files cleaned."
 
 destroy:

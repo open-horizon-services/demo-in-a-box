@@ -73,8 +73,8 @@ Set before `make init`:
 - `USE_LOCAL_REGISTRY` — Rewrite image names in service definitions to use local registry prefix (default: false)
 - `EXCHANGE_TIMEOUT` — Exchange health check timeout in iterations (default: 30, 10s each = 5min)
 - `SERVICE_TIMEOUT` — CSS/AgBot health check timeout in iterations (default: 60, 10s each = 10min)
-- `CSS_IMAGE_TAG` — CSS container image version (default: 1.0.2-1498)
-- `EXCHANGE_IMAGE_TAG` — Exchange container image version (default: 2.87.0-1498)
+- `CSS_IMAGE_TAG` — CSS container image version (default: testing)
+- `EXCHANGE_IMAGE_TAG` — Exchange container image version (default: testing)
 
 **Removed variables (no longer exist):**
 - `BOX_VERSION`, `BOX_NAME`, `HUB_BOX_NAME`, `AGENT_BOX_NAME` — box pipeline removed

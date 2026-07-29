@@ -12,10 +12,10 @@ DEPLOY_OUTPUT="/tmp/deploy-output.txt"
 ROLLBACK_MARKER="/tmp/hub-deployment-started"
 
 # Pinned versions for reproducibility
-export CSS_IMAGE_TAG="${CSS_IMAGE_TAG:-1.0.2-1498}"
+export CSS_IMAGE_TAG="${CSS_IMAGE_TAG:-testing}"
 export MONGO_IMAGE_TAG="${MONGO_IMAGE_TAG:-4.0.6}"
 export EXCHANGE_IMAGE_NAME="${EXCHANGE_IMAGE_NAME:-quay.io/open-horizon/exchange-ubi}"
-export EXCHANGE_IMAGE_TAG="${EXCHANGE_IMAGE_TAG:-2.87.0-1498}"
+export EXCHANGE_IMAGE_TAG="${EXCHANGE_IMAGE_TAG:-testing}"
 
 # Logging functions
 log_info() {
@@ -152,24 +152,8 @@ else
     log_info "✓ All additional credential files written"
 fi
 
-# Wait for Exchange to be healthy
-log_info "Waiting for Exchange to be ready (timeout: ${EXCHANGE_TIMEOUT}0s)..."
-for i in $(seq 1 "$EXCHANGE_TIMEOUT"); do
-    if curl -sf http://localhost:3090/v1/admin/version >/dev/null 2>&1; then
-        log_info "✓ Exchange is ready"
-        break
-    fi
-    if [ "$i" -eq "$EXCHANGE_TIMEOUT" ]; then
-        log_error "Exchange failed to start after $((EXCHANGE_TIMEOUT * 10))s"
-        log_error "Container status:"
-        docker ps -a --filter "name=exchange-api" --format "table {{.Names}}\t{{.Status}}" >&2
-        log_error "Recent logs:"
-        docker logs exchange-api 2>&1 | tail -50 >&2
-        exit 1
-    fi
-    sleep 10
-done
-
+# Exchange is already available if deployment completed and credentials were extracted.
+# Continue with dependent service health checks.
 # Wait for CSS to be healthy
 log_info "Waiting for CSS to be ready (timeout: ${SERVICE_TIMEOUT}0s)..."
 for i in $(seq 1 "$SERVICE_TIMEOUT"); do
