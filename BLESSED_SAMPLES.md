@@ -80,7 +80,7 @@ When `blessedSamples.txt` is present, the pipeline:
 2. **Clones** each repository (`--depth 1` for speed, full clone as fallback)
 3. **Resolves dependencies** by reading `requiredServices` from each `horizon/service.definition.json` and performing a topological sort — dependencies are always built first
 4. **Builds** each service (`make build`), with Docker buildx or Podman `--platform` for multi-arch targets
-5. **Pushes** built images to the local registry at `192.168.56.10:5000`
+5. **Pushes** built images to the local registry on the hub VM at port 5000
 6. **Publishes** services to the Exchange (`make publish` or `hzn exchange service publish`)
 7. **Reports** a summary of successes and failures
 
@@ -195,7 +195,7 @@ The pipeline will abort with an `ERROR: Circular dependency detected` message. R
 | Risk | Mitigation |
 |------|-----------|
 | Arbitrary code execution during build | Only use repositories you control or have reviewed |
-| Insecure local registry (no TLS) | Registry is private to `192.168.56.x` network; acceptable for demo use |
+| Insecure local registry (no TLS) | Registry is private to the Multipass bridge network; acceptable for demo use |
 | Credential exposure | Credentials sourced from `mycreds.env`; never logged |
 | Image vulnerabilities | Images are NOT scanned; recommended to scan manually with Trivy for production-like scenarios |
 | Private repository access | Only HTTPS repositories supported; use personal access tokens in the URL for private repos |
