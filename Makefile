@@ -22,8 +22,9 @@ export MULTIPASS_IMAGE ?= 22.04
 # Hub IP is discovered after provisioning and stored in mycreds.env
 export HUB_IP ?=
 
-# Detect Operating System running Make
+# Detect Operating System and Architecture running Make
 OS := $(shell uname -s)
+ARCH := $(shell uname -m)
 
 # Map system configurations to parameters
 ifeq ($(SYSTEM_CONFIGURATION),unicycle)
@@ -70,8 +71,15 @@ check:
 	@echo "HUB_IP                    ${HUB_IP}"
 	@echo "HZN_ORG_ID                ${HZN_ORG_ID}"
 	@echo "OS                        ${OS}"
+	@echo "ARCH                      ${ARCH}"
 	@echo "=====================     ============================================="
 	@echo ""
+	@if [ "${ARCH}" = "arm64" ] || [ "${ARCH}" = "aarch64" ]; then \
+		echo "WARNING: Running on ${ARCH} architecture. Open Horizon Management Hub (Exchange)"; \
+		echo "         is not compatible with arm64. Only agent VMs should be provisioned"; \
+		echo "         on this host, pointing to an external x86_64 hub."; \
+		echo ""; \
+	fi
 
 # Detect host IP address (cross-platform)
 detect-host-ip:
