@@ -102,3 +102,22 @@ fi
 
 log_info "✓ Agent installation complete and healthy (agent${AGENT_NUM})"
 log_info "Agent registered with Exchange at ${HUB_IP}:3090"
+
+# Populate shell environment for all users
+# Writes /etc/profile.d/open-horizon.sh so HZN_* vars are available in every
+# interactive login shell (ubuntu and root) without manual sourcing.
+if [ -f /etc/profile.d/open-horizon.sh ]; then
+    log_info "✓ /etc/profile.d/open-horizon.sh already exists — skipping write"
+else
+    cat > /etc/profile.d/open-horizon.sh <<EOF
+# Open Horizon environment variables — written by install-agent.sh
+export HZN_ORG_ID="${HZN_ORG_ID}"
+export HZN_EXCHANGE_USER_AUTH="${HZN_EXCHANGE_USER_AUTH}"
+export HZN_EXCHANGE_URL="http://${HUB_IP}:3090/v1"
+export HZN_FSS_CSSURL="http://${HUB_IP}:9443/"
+export HZN_AGBOT_URL="http://${HUB_IP}:3111"
+export HZN_FDO_SVC_URL="http://${HUB_IP}:9008/api"
+EOF
+    chmod 644 /etc/profile.d/open-horizon.sh
+    log_info "✓ Open Horizon env vars written to /etc/profile.d/open-horizon.sh"
+fi
