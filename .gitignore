@@ -18,6 +18,9 @@ mcp-server/node_modules/
 mcp-server/dist/
 example.txt
 
+# Rendered agent cloud-init files (contain credentials)
+agent*-cloud-init.yaml
+
 # Custom Vagrant box build artifacts
 *.box
 box-metadata.json

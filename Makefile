@@ -22,6 +22,9 @@ export MULTIPASS_IMAGE ?= 22.04
 # Hub IP is discovered after provisioning and stored in mycreds.env
 export HUB_IP ?=
 
+# External Exchange configuration used by 'make up-agent' (see agent-config.env.example)
+export AGENT_CONFIG ?= agent-config.env
+
 # Detect Operating System and Architecture running Make
 OS := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -77,7 +80,7 @@ check:
 	@if [ "${ARCH}" = "arm64" ] || [ "${ARCH}" = "aarch64" ]; then \
 		echo "WARNING: Running on ${ARCH} architecture. Open Horizon Management Hub (Exchange)"; \
 		echo "         is not compatible with arm64. Only agent VMs should be provisioned"; \
-		echo "         on this host, pointing to an external x86_64 hub."; \
+		echo "         on this host, pointing to an external x86_64 hub (make up-agent)."; \
 		echo ""; \
 	fi
 
@@ -245,7 +248,89 @@ up:
 		echo "ERROR: HUB_IP missing from mycreds.env. Re-run 'make up-hub'."; \
 		exit 1; \
 	fi; \
-	echo "Checking for existing agent VMs..."; \
+	$(MAKE) --no-print-directory launch-agent-vms HUB_IP=$$HUB_IP || exit 1; \
+	echo "Copying credential files from hub to agent VMs..."; \
+	for i in $$(seq 1 $(NUM_AGENTS)); do \
+		echo "  Copying credentials to agent$$i..."; \
+		for cred_file in mycreds.env root-root.env root-hubadmin.env ibm-admin.env myorg-admin.env myorg-node1.env; do \
+			if multipass exec hub -- sudo test -f /root/$$cred_file 2>/dev/null; then \
+				multipass exec hub -- sudo cat /root/$$cred_file | multipass exec agent$$i -- sudo tee /root/$$cred_file > /dev/null; \
+			fi; \
+		done; \
+		echo "  ✓ Credentials copied to agent$$i"; \
+	done; \
+	echo "Installing Open Horizon agent on all VMs (this takes ~5-10 minutes per VM)..."; \
+	for i in $$(seq 1 $(NUM_AGENTS)); do \
+		echo "  Installing agent on agent$$i..."; \
+		multipass transfer scripts/install-agent.sh agent$$i:/tmp/install-agent.sh; \
+		multipass exec agent$$i -- sudo bash /tmp/install-agent.sh $$i $$HUB_IP; \
+		if [ $$? -ne 0 ]; then \
+			echo "ERROR: Agent installation failed on agent$$i."; \
+			exit 1; \
+		fi; \
+		echo "  ✓ agent$$i installation complete"; \
+	done; \
+	echo "✓ All $(NUM_AGENTS) agent VMs provisioned and registered with Exchange."
+
+# Provision agent VMs only, registered with an existing (external) Exchange.
+# Reads credentials and service URLs from $(AGENT_CONFIG) (see
+# agent-config.env.example); no hub VM or mycreds.env is needed.
+up-agent:
+	@if [ ! -f "$(AGENT_CONFIG)" ]; then \
+		echo "ERROR: $(AGENT_CONFIG) not found."; \
+		echo "Copy agent-config.env.example to agent-config.env and fill it in,"; \
+		echo "or pass AGENT_CONFIG=path/to/file.env."; \
+		exit 1; \
+	fi
+	@CONFIG="$(abspath $(AGENT_CONFIG))"; \
+	. "$$CONFIG"; \
+	MISSING=""; \
+	for var in HZN_ORG_ID HZN_EXCHANGE_USER_AUTH HZN_EXCHANGE_URL HZN_FSS_CSSURL; do \
+		eval "val=\$${$$var}"; \
+		if [ -z "$$val" ]; then MISSING="$$MISSING $$var"; fi; \
+	done; \
+	if [ -n "$$MISSING" ]; then \
+		echo "ERROR: $(AGENT_CONFIG) is missing required settings:$$MISSING"; \
+		exit 1; \
+	fi; \
+	case "$$HZN_EXCHANGE_URL" in \
+		http://*|https://*) ;; \
+		*) echo "ERROR: HZN_EXCHANGE_URL must start with http:// or https:// (got: $$HZN_EXCHANGE_URL)"; exit 1 ;; \
+	esac; \
+	CERT_FILE="$$HZN_MGMT_HUB_CERT_PATH"; \
+	if [ -n "$$CERT_FILE" ] && [ ! -s "$$CERT_FILE" ]; then \
+		echo "ERROR: HZN_MGMT_HUB_CERT_PATH=$$CERT_FILE not found or empty on this host."; \
+		exit 1; \
+	fi; \
+	EXCHANGE_HOST=$$(echo "$$HZN_EXCHANGE_URL" | sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#'); \
+	echo "Using external Exchange $$HZN_EXCHANGE_URL (org: $$HZN_ORG_ID)"; \
+	$(MAKE) --no-print-directory launch-agent-vms HUB_IP=$$EXCHANGE_HOST || exit 1; \
+	echo "Installing Open Horizon agent on all VMs (this takes ~5-10 minutes per VM)..."; \
+	for i in $$(seq 1 $(NUM_AGENTS)); do \
+		echo "  Installing agent on agent$$i..."; \
+		multipass exec agent$$i -- sudo sh -c 'umask 077; cat > /root/mycreds.env' < "$$CONFIG" || exit 1; \
+		if [ -n "$$CERT_FILE" ]; then \
+			multipass exec agent$$i -- sudo sh -c 'cat > /root/agent-install.crt' < "$$CERT_FILE" || exit 1; \
+		fi; \
+		multipass transfer scripts/install-agent.sh agent$$i:/tmp/install-agent.sh; \
+		multipass exec agent$$i -- sudo bash /tmp/install-agent.sh $$i; \
+		if [ $$? -ne 0 ]; then \
+			echo "ERROR: Agent installation failed on agent$$i."; \
+			exit 1; \
+		fi; \
+		echo "  ✓ agent$$i installation complete"; \
+	done; \
+	echo "✓ All $(NUM_AGENTS) agent VMs provisioned and registered with $$HZN_EXCHANGE_URL."
+
+# Launch $(NUM_AGENTS) agent VMs with basic provisioning (Docker, insecure
+# registry at $(HUB_IP):5000) and wait for cloud-init. Existing agent VMs are
+# replaced. Shared by 'up' and 'up-agent'; requires HUB_IP=<hub host>.
+launch-agent-vms:
+	@if [ -z "$(HUB_IP)" ]; then \
+		echo "ERROR: HUB_IP not set. Use 'make up' or 'make up-agent'."; \
+		exit 1; \
+	fi
+	@echo "Checking for existing agent VMs..."; \
 	for i in $$(seq 1 $(NUM_AGENTS)); do \
 		AGENT_STATE=$$(multipass info agent$$i --format json 2>/dev/null | jq -r '.info["agent'$$i'"].state // empty' 2>/dev/null); \
 		if [ -n "$$AGENT_STATE" ]; then \
@@ -262,7 +347,7 @@ up:
 	PIDS=""; \
 	for i in $$(seq 1 $(NUM_AGENTS)); do \
 		export AGENT_NUM=$$i; \
-		export HUB_IP=$$HUB_IP; \
+		export HUB_IP=$(HUB_IP); \
 		AGENT_CLOUD_INIT="$$(pwd)/.bob/tmp/agent$$i-cloud-init.yaml"; \
 		mkdir -p $$(pwd)/.bob/tmp; \
 		envsubst '$${HUB_IP} $${AGENT_NUM}' < cloud-init/agent.yaml.template > $$AGENT_CLOUD_INIT; \
@@ -304,29 +389,7 @@ up:
 			echo "ERROR: Cloud-init did not complete on agent$$i after 10 minutes."; \
 			exit 1; \
 		fi; \
-	done; \
-	echo "Copying credential files from hub to agent VMs..."; \
-	for i in $$(seq 1 $(NUM_AGENTS)); do \
-		echo "  Copying credentials to agent$$i..."; \
-		for cred_file in mycreds.env root-root.env root-hubadmin.env ibm-admin.env myorg-admin.env myorg-node1.env; do \
-			if multipass exec hub -- sudo test -f /root/$$cred_file 2>/dev/null; then \
-				multipass exec hub -- sudo cat /root/$$cred_file | multipass exec agent$$i -- sudo tee /root/$$cred_file > /dev/null; \
-			fi; \
-		done; \
-		echo "  ✓ Credentials copied to agent$$i"; \
-	done; \
-	echo "Installing Open Horizon agent on all VMs (this takes ~5-10 minutes per VM)..."; \
-	for i in $$(seq 1 $(NUM_AGENTS)); do \
-		echo "  Installing agent on agent$$i..."; \
-		multipass transfer scripts/install-agent.sh agent$$i:/tmp/install-agent.sh; \
-		multipass exec agent$$i -- sudo bash /tmp/install-agent.sh $$i $$HUB_IP; \
-		if [ $$? -ne 0 ]; then \
-			echo "ERROR: Agent installation failed on agent$$i."; \
-			exit 1; \
-		fi; \
-		echo "  ✓ agent$$i installation complete"; \
-	done; \
-	echo "✓ All $(NUM_AGENTS) agent VMs provisioned and registered with Exchange."
+	done
 
 connect-hub:
 	@multipass shell hub
@@ -496,7 +559,7 @@ clean-blessed-samples:
 	@if [ -f blessed-samples-build-latest.log ]; then rm -f blessed-samples-build-latest.log; echo "✓ Local log removed"; fi
 	@echo "✓ Blessed samples cleanup complete"
 
-.PHONY: default check init up-hub up status down destroy browse connect clean \
+.PHONY: default check init up-hub up up-agent launch-agent-vms status down destroy browse connect clean \
         connect-hub status-hub destroy-hub \
         detect-host-ip check-host-ip \
         agent-config-external agent-config-internal generate-agent-configs \
