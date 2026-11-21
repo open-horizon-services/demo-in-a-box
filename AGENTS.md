@@ -36,6 +36,8 @@ demo-in-a-box/
 | Modify agent provisioning | `cloud-init/agent.yaml.template` | envsubst template; escape non-substituted `$VAR` as `\$VAR` |
 | System topologies | `Makefile` `ifeq ($(SYSTEM_CONFIGURATION),...)` blocks | unicycle/bicycle/car/semi configs |
 | Provision VMs | `make init` | Runs up-hub + up; rerunnable after interruption, reuses existing VMs |
+| Agents only, external hub | `make up-agent` | Reads `agent-config.env` (template: `agent-config.env.example`); no hub VM |
+| Agent install script | `scripts/install-agent.sh` | Uses URLs from `/root/mycreds.env` if `HZN_EXCHANGE_URL` set, else derives from hub IP |
 | Connect to agent | `make connect VMNAME=agent2` | Default: `agent1` |
 | Destroy all VMs | `make down` | Runs destroy + destroy-hub + clean |
 | Configure blessed samples | `blessedSamples.txt` (project root) | One service entry per line |
@@ -68,6 +70,7 @@ Set before `make init`:
 - `MEMORY` — MB per agent VM (default: 2048)
 - `DISK_SIZE` — GB per agent VM (default: 20)
 - `MULTIPASS_IMAGE` — Ubuntu cloud image version (default: 22.04)
+- `AGENT_CONFIG` — External Exchange config file for `make up-agent` (default: agent-config.env)
 - `EXPOSE_REGISTRY_PORT` — Use `make port-forward` instead; this flag now only affects which ports are tunnelled
 - `FAIL_FAST` — Abort blessed samples build on first failure (default: false)
 - `USE_LOCAL_REGISTRY` — Rewrite image names in service definitions to use local registry prefix (default: false)
@@ -161,6 +164,7 @@ export MEMORY=4096
 make init           # Custom config
 
 make up-hub         # Hub only (manual agent setup)
+make up-agent       # Agents only, registered with external hub from agent-config.env
 make connect-hub    # Shell into hub VM
 make connect VMNAME=agent3  # Shell into specific agent
 make port-forward   # Expose hub ports on localhost (3090, 3111, 9008, 9443)

@@ -316,6 +316,8 @@ make init
 
 If you only want the hub running in a VM (no separate agent VMs), just run `make up-hub` instead of `make init`.
 
+If you only want agent VMs registered with a hub you already have, use `make up-agent` (see [Agent-Only Mode](#agent-only-mode-external-exchange)).
+
 Running `make down` will de-provision all VMs and delete temporary files. This cannot be undone.
 
 ## Agent Configuration Files
@@ -380,6 +382,33 @@ make agent-config-internal
 ```
 
 **Note:** To expose hub service ports on `localhost`, use `make port-forward` after `make up-hub`. This is the replacement for the Vagrant `forwarded_port` behaviour.
+
+## Agent-Only Mode (External Exchange)
+
+To provision only agent VMs and register them with an existing Open Horizon management hub (for example, on an arm64 host where the hub cannot run), describe the hub in a config file and run `make up-agent`. No hub VM or `mycreds.env` is needed.
+
+```shell
+cp agent-config.env.example agent-config.env
+# Edit agent-config.env with your hub's URLs and credentials
+make up-agent
+```
+
+The config file (git-ignored as `*.env`) supports:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HZN_ORG_ID` | Yes | Organization to register nodes in |
+| `HZN_EXCHANGE_USER_AUTH` | Yes | Exchange user credentials (`user:password`) |
+| `HZN_EXCHANGE_URL` | Yes | Exchange API URL, e.g. `https://hub.example.com/edge-exchange/v1` |
+| `HZN_FSS_CSSURL` | Yes | Cloud Sync Service URL |
+| `HZN_AGBOT_URL` | No | Agreement Bot URL |
+| `HZN_FDO_SVC_URL` | No | FDO service URL |
+| `HZN_MGMT_HUB_CERT_PATH` | No | Path on this host to the hub's CA certificate (HTTPS hubs). If unset, the certificate is fetched from CSS |
+| `HZN_NODE_PATTERN` | No | Pattern to register with (default: `IBM/pattern-ibm.helloworld`) |
+
+An `agent-install.cfg` exported from your hub works as-is. To use a different file, run `make up-agent AGENT_CONFIG=path/to/file.env`. `SYSTEM_CONFIGURATION`, `NUM_AGENTS`, `MEMORY`, and `DISK_SIZE` apply as with `make up`.
+
+The external hub must provide the agent install files in CSS and the node pattern you register with. A hub deployed with `deploy-mgmt-hub.sh` provides both. Agent VMs also trust `<exchange-host>:5000` as an insecure container registry, the same as with the built-in hub.
 
 ## Usage
 

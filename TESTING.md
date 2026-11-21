@@ -68,6 +68,29 @@ make init
 
 ---
 
+### Test 1.3: Agent-only against an external Exchange
+
+**Purpose:** Verify `make up-agent` registers agents with an existing hub, without a hub VM
+
+```bash
+make down
+cp agent-config.env.example agent-config.env
+# Edit agent-config.env to point at a running hub
+make up-agent
+```
+
+**Verification:**
+- [ ] No `hub` VM is created (`multipass list`)
+- [ ] `make up-agent` with a missing `HZN_EXCHANGE_URL` fails before launching VMs
+- [ ] `agent1` launches and the agent registers with the configured Exchange
+- [ ] On agent: `hzn node list` shows the configured pattern's workload
+- [ ] On agent: `/root/agent-install.cfg` contains the configured URLs
+- [ ] With `HZN_MGMT_HUB_CERT_PATH` set, an HTTPS hub works and `/root/agent-install.crt` matches the host file
+
+**Expected Time:** 10–15 minutes
+
+---
+
 ## Test Suite 2: Connectivity
 
 ### Test 2.1: Hub service health
